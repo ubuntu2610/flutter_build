@@ -2,9 +2,9 @@
 //
 // Precedence (highest first):
 //   1. Explicit `cacheDirOverride` (from `--cache-dir` global flag).
-//   2. Environment variable `FLUTTER_WIN_CACHE`.
-//   3. `$XDG_CACHE_HOME/flutter_win` if XDG_CACHE_HOME is set.
-//   4. `$HOME/.flutter_win`.
+//   2. Environment variable `FLUTTER_BUILD_CACHE`.
+//   3. `$XDG_CACHE_HOME/flutter_build` if XDG_CACHE_HOME is set.
+//   4. `$HOME/.flutter_build`.
 //
 // Layout under the root:
 //
@@ -28,10 +28,10 @@ class CachePaths {
   factory CachePaths.resolve({String? cacheDirOverride}) {
     final env = Platform.environment;
     final candidate = cacheDirOverride ??
-        env['FLUTTER_WIN_CACHE'] ??
+        env['FLUTTER_BUILD_CACHE'] ??
         (env['XDG_CACHE_HOME'] != null
-            ? p.join(env['XDG_CACHE_HOME']!, 'flutter_win')
-            : p.join(env['HOME'] ?? '/tmp', '.flutter_win'));
+            ? p.join(env['XDG_CACHE_HOME']!, 'flutter_build')
+            : p.join(env['HOME'] ?? '/tmp', '.flutter_build'));
     return CachePaths._(Directory(candidate).absolute.path);
   }
 

@@ -1,4 +1,4 @@
-// `flutter_win doctor` — diagnose the host environment.
+// `flutter_build doctor` — diagnose the host environment.
 //
 // Never mutates state. Emits a colored, tabular summary that shows what
 // was found, what's missing, and precise commands to remediate.

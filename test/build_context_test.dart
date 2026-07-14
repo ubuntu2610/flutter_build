@@ -10,11 +10,11 @@
 //           └── data/
 //                 └── flutter_assets/
 
-import 'package:flutter_win/src/build/build_context.dart';
-import 'package:flutter_win/src/engine_artifacts.dart';
-import 'package:flutter_win/src/flutter_env.dart';
-import 'package:flutter_win/src/project.dart';
-import 'package:flutter_win/src/toolchain.dart';
+import 'package:flutter_build/src/build/build_context.dart';
+import 'package:flutter_build/src/engine_artifacts.dart';
+import 'package:flutter_build/src/flutter_env.dart';
+import 'package:flutter_build/src/project.dart';
+import 'package:flutter_build/src/toolchain.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 

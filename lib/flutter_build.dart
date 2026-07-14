@@ -1,6 +1,6 @@
-/// Public entry points for the `flutter_win` package.
+/// Public entry points for the `flutter_build` package.
 ///
-/// Most consumers only need the CLI (`bin/flutter_win.dart`); this
+/// Most consumers only need the CLI (`bin/flutter_build.dart`); this
 /// library re-exports the pieces that are useful to embed the cross-build
 /// pipeline into a larger Dart tool.
 library;

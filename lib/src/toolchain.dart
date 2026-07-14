@@ -8,7 +8,7 @@
 // 使用方式：
 //   final tc = await ToolchainProvisioner(paths: cachePaths, runner: runner)
 //       .provision(allowDownload: true);
-//   print(tc.clang);  // /home/you/.flutter_win/toolchains/llvm-mingw-.../bin/x86_64-w64-mingw32-clang
+//   print(tc.clang);  // /home/you/.flutter_build/toolchains/llvm-mingw-.../bin/x86_64-w64-mingw32-clang
 //
 // 参考：
 //   - https://github.com/mstorsjo/llvm-mingw : 官方 Release 页面
@@ -158,7 +158,7 @@ class Toolchain {
 ///      → 直接使用用户指定的目录，不下载。
 ///   2. 缓存目录中已解压的 LLVM-MinGW
 ///      → 复用上次 precache 的产物。
-///   3. 自动下载（支持镜像 URL `FLUTTER_WIN_MIRROR`）
+///   3. 自动下载（支持镜像 URL `FLUTTER_BUILD_MIRROR`）
 ///      → 从 GitHub / 镜像拉取。
 ///   4. 系统 apt 安装的 GCC-MinGW（`apt install gcc-mingw-w64-x86-64`）
 ///      → 当上述全部失败时作为后备。
@@ -252,16 +252,16 @@ class ToolchainProvisioner {
     if (!allowDownload) {
       throw ToolException(
         'LLVM-MinGW is not installed at $destDir',
-        hint: 'Run `flutter_win precache` first, or set '
+        hint: 'Run `flutter_build precache` first, or set '
             'LLVM_MINGW_ROOT to a pre-existing installation, or '
             '`sudo apt install gcc-mingw-w64-x86-64` as fallback.',
       );
     }
 
-    // 支持镜像 URL：环境变量 FLUTTER_WIN_MIRROR 替换 GitHub URL。
+    // 支持镜像 URL：环境变量 FLUTTER_BUILD_MIRROR 替换 GitHub URL。
     // 例如设置为 https://mirrors.example.com/llvm-mingw/releases/download
     // 则最终 URL = <mirror>/<version>/<archiveName>
-    final mirror = Platform.environment['FLUTTER_WIN_MIRROR'];
+    final mirror = Platform.environment['FLUTTER_BUILD_MIRROR'];
     final downloadUrl = mirror != null && mirror.isNotEmpty
         ? '$mirror/${_release.version}/${_release.archiveName}'
         : _release.downloadUrl();
@@ -325,7 +325,7 @@ class ToolchainProvisioner {
         'Neither LLVM-MinGW nor system GCC-MinGW could be found.',
         hint: 'Choose one:\n'
             '  • export LLVM_MINGW_ROOT=/path/to/llvm-mingw  (manually downloaded)\n'
-            '  • flutter_win precache  (auto-download from GitHub)\n'
+            '  • flutter_build precache  (auto-download from GitHub)\n'
             '  • sudo apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64  (GCC fallback)',
       );
     }

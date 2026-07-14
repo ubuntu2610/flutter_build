@@ -1,4 +1,4 @@
-// `flutter_win build [--debug|--profile|--release]`
+// `flutter_build windows [--debug|--profile|--release]`
 //
 // The command performs the full cross-build pipeline on the current
 // directory (assumed to be a Flutter app project).
@@ -17,8 +17,8 @@ import '../process_runner.dart';
 import '../project.dart';
 import '../toolchain.dart';
 
-class BuildCommand extends Command<int> {
-  BuildCommand() {
+class WindowsCommand extends Command<int> {
+  WindowsCommand() {
     argParser
       ..addFlag('debug',
           negatable: false, help: 'Build the debug (JIT) flavor.')
@@ -52,7 +52,7 @@ class BuildCommand extends Command<int> {
   }
 
   @override
-  String get name => 'build';
+  String get name => 'windows';
   @override
   String get description =>
       'Cross-compile the Flutter Windows executable for the current project.';

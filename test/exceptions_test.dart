@@ -2,7 +2,7 @@
 //
 // 验证各异常类的构造、字段、继承关系，以及默认退出码行为。
 
-import 'package:flutter_win/flutter_win.dart';
+import 'package:flutter_build/flutter_build.dart';
 import 'package:test/test.dart';
 
 void main() {

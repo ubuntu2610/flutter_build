@@ -1,23 +1,23 @@
-# flutter_win 示例工程
+# flutter_build 示例工程
 
 本目录本身就是一个标准 Flutter Windows 桌面应用（由 `flutter create --platforms=windows` 生成），
-用于演示如何在 **Ubuntu (Linux)** 上使用 `flutter_win` 交叉编译出 `.exe`。
+用于演示如何在 **Ubuntu (Linux)** 上使用 `flutter_build` 交叉编译出 `.exe`。
 
 ---
 
-## 第 1 步：安装 `flutter_win` 命令
+## 第 1 步：安装 `flutter_build` 命令
 
 ```bash
-cd /path/to/flutter_win          # 仓库根目录，不是 example/
+cd /path/to/flutter_build          # 仓库根目录，不是 example/
 dart pub global activate --source path .
 ```
 
 ### **关键**：把 `~/.pub-cache/bin` 加进 PATH
 
-如果直接运行 `flutter_win` 报：
+如果直接运行 `flutter_build` 报：
 
 ```
-flutter_win：未找到命令
+flutter_build：未找到命令
 ```
 
 原因是 `dart pub global activate` 把二进制装在 `~/.pub-cache/bin`，而这个目录
@@ -28,11 +28,11 @@ echo 'export PATH="$PATH:$HOME/.pub-cache/bin"' >> ~/.bashrc
 source ~/.bashrc
 
 # 验证
-which flutter_win        # 应输出 /home/xxx/.pub-cache/bin/flutter_win
-flutter_win --version
+which flutter_build        # 应输出 /home/xxx/.pub-cache/bin/flutter_build
+flutter_build --version
 ```
 
-> 不想动 PATH？也可以在仓库根目录用 `dart run flutter_win <命令>` 代替。
+> 不想动 PATH？也可以在仓库根目录用 `dart run flutter_build <命令>` 代替。
 
 ---
 
@@ -49,7 +49,7 @@ sudo apt install wine64 cmake ninja-build
 **方案 A：自动下载 LLVM-MinGW（推荐，~250 MB，一次性）**
 
 ```bash
-flutter_win precache
+flutter_build precache
 ```
 
 **方案 B：手动下载后指定路径（国内推荐，避免 GitHub 慢）**
@@ -67,14 +67,14 @@ export LLVM_MINGW_ROOT=~/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64
 
 ```bash
 sudo apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
-# flutter_win 在 LLVM-MinGW 不可用时会自动回退到它
+# flutter_build 在 LLVM-MinGW 不可用时会自动回退到它
 ```
 
 有内网镜像时可加速方案 A：
 
 ```bash
-export FLUTTER_WIN_MIRROR=https://mirrors.yourcompany.com/llvm-mingw/releases/download
-flutter_win precache
+export FLUTTER_BUILD_MIRROR=https://mirrors.yourcompany.com/llvm-mingw/releases/download
+flutter_build precache
 ```
 
 ---
@@ -84,8 +84,8 @@ flutter_win precache
 ```bash
 cd example
 flutter pub get
-flutter_win doctor            # 环境自检
-flutter_win build --release   # 交叉编译
+flutter_build doctor            # 环境自检
+flutter_build windows --release   # 交叉编译
 ```
 
 ---
@@ -110,23 +110,23 @@ hello/
 
 | 命令                             | 说明                                |
 |----------------------------------|-------------------------------------|
-| `flutter_win build --release`    | 生产模式（默认，AOT 编译）           |
-| `flutter_win build --profile`    | AOT + 性能分析标志                   |
-| `flutter_win build --debug`      | JIT 模式（附带 kernel_blob.bin）     |
+| `flutter_build windows --release`    | 生产模式（默认，AOT 编译）           |
+| `flutter_build windows --profile`    | AOT + 性能分析标志                   |
+| `flutter_build windows --debug`      | JIT 模式（附带 kernel_blob.bin）     |
 
 ## 其他命令
 
 ```bash
-flutter_win doctor             # 环境诊断，扫描插件里的 WinRT / DX12 隐患
-flutter_win precache           # 预下载工具链 + engine 产物（CI / Docker 常用）
-flutter_win clean              # 只清理 build/win_cross/，不动缓存
+flutter_build doctor             # 环境诊断，扫描插件里的 WinRT / DX12 隐患
+flutter_build precache           # 预下载工具链 + engine 产物（CI / Docker 常用）
+flutter_build clean              # 只清理 build/win_cross/，不动缓存
 ```
 
 ---
 
 ## 常见问题
 
-**Q：`flutter_win：未找到命令`**
+**Q：`flutter_build：未找到命令`**
 A：`dart pub global activate` 执行过了，但 `~/.pub-cache/bin` 没进 PATH。
 参见「第 1 步」中的 `export` 命令。
 
@@ -134,7 +134,7 @@ A：`dart pub global activate` 执行过了，但 `~/.pub-cache/bin` 没进 PATH
 A：第 3 步的三个方案都没生效，任选一种即可（推荐方案 A）。
 
 **Q：某插件报 `<winrt/...>` 或 `<d3d12*>` 头文件缺失**
-A：mingw-w64 对 WinRT / DX12 覆盖不全。`flutter_win doctor` 会预先扫出这类
+A：mingw-w64 对 WinRT / DX12 覆盖不全。`flutter_build doctor` 会预先扫出这类
 插件。可选：换纯 Dart 替代实现、本地打补丁、或在真实 Windows 上编好插件 DLL
 后拷进产物目录。
 

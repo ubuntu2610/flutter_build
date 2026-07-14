@@ -14,7 +14,7 @@
 
 import 'dart:io';
 
-import 'package:flutter_win/src/build/msvc_flag_translator.dart';
+import 'package:flutter_build/src/build/msvc_flag_translator.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 

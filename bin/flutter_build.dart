@@ -1,4 +1,4 @@
-// Entry point for the `flutter_win` CLI.
+// Entry point for the `flutter_build` CLI.
 //
 // Wires the top-level [CommandRunner] with the subcommands defined in
 // `lib/src/commands/`. Keeps this file intentionally tiny so global flags
@@ -7,16 +7,16 @@
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
-import 'package:flutter_win/flutter_win.dart';
-import 'package:flutter_win/src/commands/build_command.dart';
-import 'package:flutter_win/src/commands/clean_command.dart';
-import 'package:flutter_win/src/commands/doctor_command.dart';
-import 'package:flutter_win/src/commands/precache_command.dart';
-import 'package:flutter_win/src/logger.dart';
+import 'package:flutter_build/flutter_build.dart';
+import 'package:flutter_build/src/commands/clean_command.dart';
+import 'package:flutter_build/src/commands/doctor_command.dart';
+import 'package:flutter_build/src/commands/precache_command.dart';
+import 'package:flutter_build/src/commands/windows_command.dart';
+import 'package:flutter_build/src/logger.dart';
 
 Future<void> main(List<String> args) async {
   final runner = CommandRunner<int>(
-    'flutter_win',
+    'flutter_build',
     'Cross-compile Flutter Windows apps on Linux (LLVM-MinGW + Wine).',
   )
     ..argParser.addFlag(
@@ -33,24 +33,24 @@ Future<void> main(List<String> args) async {
     ..argParser.addOption(
       'cache-dir',
       help: 'Override toolchain / engine cache root '
-          '(default: \$HOME/.flutter_win).',
+          '(default: \$HOME/.flutter_build).',
     )
     ..argParser.addFlag(
       'version',
       negatable: false,
-      help: 'Print the flutter_win version and exit.',
+      help: 'Print the flutter_build version and exit.',
     );
 
   runner
     ..addCommand(DoctorCommand())
     ..addCommand(PrecacheCommand())
-    ..addCommand(BuildCommand())
+    ..addCommand(WindowsCommand())
     ..addCommand(CleanCommand());
 
   try {
     final topLevel = runner.argParser.parse(args);
     if (topLevel['version'] == true) {
-      stdout.writeln('flutter_win $packageVersion');
+      stdout.writeln('flutter_build $packageVersion');
       exit(0);
     }
     Logger.instance = Logger(

@@ -5,7 +5,7 @@
 //   - isProduct: 仅 release=true
 //   - cliName: 字面量匹配
 
-import 'package:flutter_win/src/engine_artifacts.dart';
+import 'package:flutter_build/src/engine_artifacts.dart';
 import 'package:test/test.dart';
 
 void main() {

@@ -1,7 +1,7 @@
-// `flutter_win clean` — remove the cross-build output.
+// `flutter_build clean` — remove the cross-build output.
 //
 // Never touches the local toolchain / engine caches; use
-// `rm -rf $HOME/.flutter_win` (or the value returned by `--cache-dir`)
+// `rm -rf $HOME/.flutter_build` (or the value returned by `--cache-dir`)
 // to wipe those.
 
 import 'dart:io';

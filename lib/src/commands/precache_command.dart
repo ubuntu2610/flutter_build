@@ -1,5 +1,5 @@
-// `flutter_win precache` — download the toolchain + engine artifacts
-// so that a subsequent `build` is fully offline.
+// `flutter_build precache` — download the toolchain + engine artifacts
+// so that a subsequent `windows` is fully offline.
 
 import 'package:args/command_runner.dart';
 

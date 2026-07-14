@@ -1,4 +1,4 @@
-# flutter_win
+# flutter_build
 
 Cross-compile Flutter Windows (x86_64) desktop applications **on Linux** — no
 MSVC, no Windows SDK, no Windows VM.
@@ -36,12 +36,12 @@ Plus a Windows cross toolchain — see [Toolchain options](#3-provision-the-cros
 ### 1. Activate the CLI
 
 ```bash
-git clone <this-repo> flutter_win
-cd flutter_win
+git clone <this-repo> flutter_build
+cd flutter_build
 dart pub global activate --source path .
 ```
 
-### 2. Put `~/.pub-cache/bin` on PATH  ← **do this or you'll see `flutter_win: command not found`**
+### 2. Put `~/.pub-cache/bin` on PATH  ← **do this or you'll see `flutter_build: command not found`**
 
 `dart pub global activate` installs the binary into `~/.pub-cache/bin`, which
 is **not** on PATH in a fresh Ubuntu shell. Add it once:
@@ -54,19 +54,19 @@ source ~/.bashrc
 Verify:
 
 ```bash
-which flutter_win        # → /home/you/.pub-cache/bin/flutter_win
-flutter_win --version
+which flutter_build        # → /home/you/.pub-cache/bin/flutter_build
+flutter_build --version
 ```
 
 > Don't want to change PATH? From inside this repo you can always run
-> `dart run flutter_win <command>` instead.
+> `dart run flutter_build <command>` instead.
 
 ### 3. Provision the cross toolchain (choose one)
 
 **A. Auto-download LLVM-MinGW (recommended, ~250 MB, one-time)**
 
 ```bash
-flutter_win precache
+flutter_build precache
 ```
 
 **B. Manual download (fast networks / proxy / mirror / USB)**
@@ -82,14 +82,14 @@ export LLVM_MINGW_ROOT=~/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64
 
 ```bash
 sudo apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
-# flutter_win auto-detects this when LLVM-MinGW is unavailable.
+# flutter_build auto-detects this when LLVM-MinGW is unavailable.
 ```
 
 To speed up option A behind a slow link, point at a mirror:
 
 ```bash
-export FLUTTER_WIN_MIRROR=https://mirrors.example.com/llvm-mingw/releases/download
-flutter_win precache
+export FLUTTER_BUILD_MIRROR=https://mirrors.example.com/llvm-mingw/releases/download
+flutter_build precache
 ```
 
 ---
@@ -103,8 +103,8 @@ cd my_flutter_app
 flutter create --platforms=windows .
 
 flutter pub get
-flutter_win doctor          # sanity check the host + project
-flutter_win build --release # produce the .exe
+flutter_build doctor          # sanity check the host + project
+flutter_build windows --release # produce the .exe
 ```
 
 Output layout — `build/win_cross/release/<app>/`:
@@ -123,18 +123,18 @@ Output layout — `build/win_cross/release/<app>/`:
 
 ## Commands
 
-### `flutter_win doctor [--allow-download]`
+### `flutter_build doctor [--allow-download]`
 
 Pre-flight diagnostics — Flutter SDK, project scaffold, cross toolchain,
 Windows engine artifacts. Also scans plugin native code for MinGW-unfriendly
 headers (`winrt::`, `<winrt/...>`, `<d3d12...>`, `__uuidof`).
 
-### `flutter_win precache [--toolchain-only | --engine-only] [--toolchain-path DIR]`
+### `flutter_build precache [--toolchain-only | --engine-only] [--toolchain-path DIR]`
 
 Downloads LLVM-MinGW and the Windows engine artifacts ahead of time — handy
 for CI / Docker images.
 
-### `flutter_win build [flags]`
+### `flutter_build windows [flags]`
 
 | Flag                                   | Purpose                                                     |
 |----------------------------------------|-------------------------------------------------------------|
@@ -149,10 +149,10 @@ for CI / Docker images.
 
 Top-level flags: `-v` / `--verbose`, `--no-color`, `--cache-dir <dir>`, `--version`.
 
-### `flutter_win clean [-o path]`
+### `flutter_build clean [-o path]`
 
 Removes `build/win_cross/` for the current project. Does **not** touch the
-toolchain / engine cache — delete `~/.flutter_win/` yourself to wipe those.
+toolchain / engine cache — delete `~/.flutter_build/` yourself to wipe those.
 
 ---
 
@@ -204,9 +204,9 @@ toolchain / engine cache — delete `~/.flutter_win/` yourself to wipe those.
 
 ## Troubleshooting
 
-**`flutter_win: command not found`  /  `flutter_win：未找到命令`**
+**`flutter_build: command not found`  /  `flutter_build：未找到命令`**
 `dart pub global activate` succeeded, but `~/.pub-cache/bin` isn't on PATH.
-Apply the `export` from install step 2, or use `dart run flutter_win <cmd>`
+Apply the `export` from install step 2, or use `dart run flutter_build <cmd>`
 from inside this repo.
 
 **`Neither LLVM-MinGW nor system GCC-MinGW could be found.`**
@@ -214,7 +214,7 @@ Pick a toolchain option in install step 3, or set `LLVM_MINGW_ROOT` to an
 existing install directory.
 
 **Plugin fails with `<winrt/...>` or `<d3d12*>` header errors**
-mingw-w64's WinRT/DX12 headers are incomplete. `flutter_win doctor` flags
+mingw-w64's WinRT/DX12 headers are incomplete. `flutter_build doctor` flags
 these plugins. Options: swap in a Dart-only alternative, patch the plugin
 locally, or build that plugin on a real Windows host and drop the resulting
 DLL alongside the exe.

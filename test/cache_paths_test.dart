@@ -2,13 +2,13 @@
 //
 // 验证优先级：
 //   1. 命令行参数 (cacheDirOverride)
-//   2. 环境变量 FLUTTER_WIN_CACHE
+//   2. 环境变量 FLUTTER_BUILD_CACHE
 //   3. XDG_CACHE_HOME
-//   4. $HOME/.flutter_win
+//   4. $HOME/.flutter_build
 
 import 'dart:io';
 
-import 'package:flutter_win/src/cache_paths.dart';
+import 'package:flutter_build/src/cache_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
