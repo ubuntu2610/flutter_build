@@ -1,0 +1,17 @@
+# Dart
+.dart_tool/
+.packages
+build/
+pubspec.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local toolchain caches (should live in ~/.flutter_win_cross by default)
+.flutter_win_cross_cache/

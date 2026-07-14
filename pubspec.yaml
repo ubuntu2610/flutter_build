@@ -1,0 +1,27 @@
+name: flutter_win
+description: >-
+  Cross-compile Flutter Windows (x86_64) applications on Linux using
+  LLVM-MinGW as the C/C++ toolchain and Wine for running the Windows
+  gen_snapshot binary. No MSVC / no Windows SDK required.
+version: 0.1.0-dev
+repository: https://example.com/flutter_win
+publish_to: none
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+executables:
+  flutter_win: flutter_win
+
+dependencies:
+  args: ^2.5.0
+  archive: ^3.6.1
+  crypto: ^3.0.3
+  http: ^1.2.1
+  path: ^1.9.0
+  pub_semver: ^2.1.4
+  yaml: ^3.1.2
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0
