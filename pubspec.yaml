@@ -1,11 +1,19 @@
 name: flutter_win
 description: >-
-  Cross-compile Flutter Windows (x86_64) applications on Linux using
-  LLVM-MinGW as the C/C++ toolchain and Wine for running the Windows
-  gen_snapshot binary. No MSVC / no Windows SDK required.
+  Cross-compile Flutter Windows (x86_64) desktop apps on Linux using
+  LLVM-MinGW + Wine. No MSVC, no Windows SDK, no Windows machine required.
 version: 0.1.0-dev
-repository: https://example.com/flutter_win
-publish_to: none
+
+# TODO(before `dart pub publish`): replace OWNER/flutter_win with the real
+# GitHub path. pub.dev requires a reachable public repository URL.
+repository: https://github.com/OWNER/flutter_win
+issue_tracker: https://github.com/OWNER/flutter_win/issues
+
+topics:
+  - flutter
+  - windows
+  - cross-compile
+  - mingw
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

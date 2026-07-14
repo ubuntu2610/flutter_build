@@ -1,3 +1,43 @@
+# ─── Dart / Flutter ───────────────────────────────────────────
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+pubspec.lock
+doc/api/
+coverage/
+*.log
+
+# ─── flutter_win runtime cache ────────────────────────────────
+# Default location is $HOME/.flutter_win (see lib/src/cache_paths.dart).
+# This guard covers `--cache-dir .flutter_win` used from inside the repo.
+.flutter_win/
+
+# ─── Cross-toolchain artefacts (in case a user unpacks in-repo) ─
+llvm-mingw-*/
+*.tar.xz
+*.tar.gz
+
+# ─── IDE / editors ────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.swp
+
+# ─── AI assistants / local scratch ────────────────────────────
+.claude/
+.qoder/
+.cursor/
+.aider*
+.env
+.env.*
+
+# ─── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
 # Dart
 .dart_tool/
 .packages
