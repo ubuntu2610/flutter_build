@@ -113,7 +113,7 @@ void main() {
         toolchain: _stubToolchain(),
         mode: WindowsFlavor.debug,
         buildRoot: '/build',
-        dartDefines: [],
+        dartDefines: <String>[],
       );
       expect(debugCtx.modeDir, '/build/debug');
     });
@@ -126,7 +126,7 @@ void main() {
         toolchain: _stubToolchain(),
         mode: WindowsFlavor.profile,
         buildRoot: '/build',
-        dartDefines: [],
+        dartDefines: <String>[],
       );
       expect(profileCtx.modeDir, '/build/profile');
     });

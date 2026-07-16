@@ -3,7 +3,7 @@
 .packages
 .flutter-plugins
 .flutter-plugins-dependencies
-build/
+/build/
 pubspec.lock
 doc/api/
 coverage/
@@ -36,20 +36,6 @@ llvm-mingw-*/
 .env.*
 
 # ─── OS ───────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-# Dart
-.dart_tool/
-.packages
-build/
-pubspec.lock
-
-# IDE
-.idea/
-.vscode/
-*.iml
-
-# OS
 .DS_Store
 Thumbs.db
 
