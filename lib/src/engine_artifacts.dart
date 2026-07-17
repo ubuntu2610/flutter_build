@@ -86,6 +86,22 @@ class EngineArtifacts {
   final String hostEngineDir;
 
   String get flutterWindowsDll => p.join(embedderDir, 'flutter_windows.dll');
+
+  /// 按构建模式解析 `flutter_windows.dll`。
+  ///
+  /// `windows-x64` 是 **debug/JIT** 引擎；release/profile 必须用
+  /// `windows-x64-release` / `windows-x64-profile` 里的 **AOT** 引擎。否则引擎
+  /// 会运行在 JIT 模式，而 bundle 里只有 app.so（AOT），启动即失败：
+  /// “Not running in AOT mode but could not resolve the kernel binary”。
+  String flutterWindowsDllForMode(WindowsFlavor mode) {
+    final dir = switch (mode) {
+      WindowsFlavor.release => releaseArtifactsDir,
+      WindowsFlavor.profile => profileArtifactsDir,
+      WindowsFlavor.debug => embedderDir,
+    };
+    return p.join(dir, 'flutter_windows.dll');
+  }
+
   String get flutterWindowsHeader => p.join(embedderDir, 'flutter_windows.h');
   String get cppClientWrapperDir => p.join(embedderDir, 'cpp_client_wrapper');
   String get flutterWindowsImportLib =>

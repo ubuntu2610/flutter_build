@@ -20,7 +20,7 @@ MSVC, no Windows SDK, no Windows VM.
 
 | Dependency          | Install                                     |
 |---------------------|---------------------------------------------|
-| Linux x86_64        | Ubuntu 22.04 tested                         |
+| Linux x86_64        | Ubuntu 24.04 tested                         |
 | Flutter SDK ≥ 3.13  | https://flutter.dev                         |
 | Dart SDK on PATH    | Ships with Flutter                          |
 | Wine (64-bit)       | `sudo apt install wine64`                   |

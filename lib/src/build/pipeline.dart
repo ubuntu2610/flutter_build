@@ -328,10 +328,11 @@ class BuildPipeline {
     }
     await builtExe.copy(ctx.finalExe);
 
-    // 嵌入器动态库与 exe 同级；icu 放 data/。
-    if (File(ctx.artifacts.flutterWindowsDll).existsSync()) {
-      await File(ctx.artifacts.flutterWindowsDll)
-          .copy(p.join(outDir, 'flutter_windows.dll'));
+    // 嵌入器动态库与 exe 同级；icu 放 data/。按模式选对引擎 DLL：
+    // release/profile 用 AOT 引擎，debug 用 JIT 引擎（否则模式不匹配启动失败）。
+    final engineDll = ctx.artifacts.flutterWindowsDllForMode(ctx.mode);
+    if (File(engineDll).existsSync()) {
+      await File(engineDll).copy(p.join(outDir, 'flutter_windows.dll'));
     }
     await Directory(dataDir).create(recursive: true);
     if (File(ctx.artifacts.icudtl).existsSync()) {
