@@ -17,6 +17,7 @@ import 'debug_instrumentation.dart';
 import 'flutter_ephemeral.dart';
 import 'host_env.dart';
 import 'msvc_flag_translator.dart';
+import 'plugin_source_patcher.dart';
 import 'wine_wrapper.dart';
 
 /// 递归复制目录树，但不跟随符号链接。
@@ -101,6 +102,7 @@ class BuildPipeline {
     await Directory(ctx.windowsStageDir).create(recursive: true);
     await _copyTree(ctx.project.windowsDir, ctx.windowsStageDir);
     await _generateFlutterEphemeral(ctx);
+    await _patchPluginSources(ctx);
     await _normalizeResourceScripts(ctx);
     if (ctx.debugConsole) await _instrumentRunner(ctx);
   }
@@ -117,6 +119,14 @@ class BuildPipeline {
     await mainCpp.writeAsString(patched);
     _log.info('已注入调试信息（默认开启，--no-debug-console 可关）：'
         '从 PowerShell/cmd 运行可看到引擎日志，启动失败会弹 MessageBox。');
+  }
+
+  /// 对暂存目录下 `.plugin_symlinks/` 中已知有 Clang/MinGW 兼容问题的插件
+  /// 应用源码补丁。在 `_generateFlutterEphemeral`（创建符号链接）之后、
+  /// `_translateFlags`（翻译 CMakeLists.txt 标志）之前执行。
+  Future<void> _patchPluginSources(BuildContext ctx) async {
+    final ephemeralDir = p.join(ctx.windowsStageDir, 'flutter', 'ephemeral');
+    await const PluginSourcePatcher().apply(ephemeralDir, logger: _log);
   }
 
   /// 归一化暂存目录里所有 `.rc` 资源脚本中的路径分隔符：把转义反斜杠

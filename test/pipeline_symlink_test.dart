@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_build/src/build/build_context.dart';
 import 'package:flutter_build/src/build/msvc_flag_translator.dart';
 import 'package:flutter_build/src/build/pipeline.dart';
+import 'package:flutter_build/src/build/plugin_source_patcher.dart';
 import 'package:flutter_build/src/engine_artifacts.dart';
 import 'package:flutter_build/src/flutter_env.dart';
 import 'package:flutter_build/src/project.dart';
@@ -194,5 +195,154 @@ void main() {
       ),
       FileSystemEntityType.notFound,
     );
+  });
+
+  // ── PluginSourcePatcher 纯函数补丁 ──────────────────────────────
+
+  group('patchWindowManagerCpp', () {
+    test('移除 #pragma once 并修复 Windows.h 大小写', () {
+      const input = '#include "window_manager_plugin.h"\n'
+          '// This must be included before many other Windows headers.\n'
+          '#pragma once\n'
+          '#include <Windows.h>\n';
+      final out = patchWindowManagerCpp(input);
+      expect(out, isNot(contains('#pragma once')));
+      expect(out, contains('#include <windows.h>'));
+      expect(out, isNot(contains('Windows.h')));
+    });
+
+    test('移除类体内多余 WindowManager:: 限定但保留类外定义', () {
+      const input = 'class WindowManager {\n'
+          '  void WindowManager::ForceRefresh();\n'
+          '  bool WindowManager::IsFocused();\n'
+          '};\n'
+          'void WindowManager::ForceRefresh() {}\n';
+      final out = patchWindowManagerCpp(input);
+      expect(out, contains('  void ForceRefresh();'));
+      expect(out, contains('  bool IsFocused();'));
+      // 类外定义保留限定
+      expect(out, contains('void WindowManager::ForceRefresh() {}'));
+    });
+
+    test('幂等：重复调用不产生变化', () {
+      const input = '#pragma once\n#include <Windows.h>\n'
+          '  void WindowManager::Foo();\n';
+      final once = patchWindowManagerCpp(input);
+      final twice = patchWindowManagerCpp(once);
+      expect(twice, once);
+    });
+  });
+
+  group('patchHotkeyManagerPluginCpp', () {
+    test('EncodableMap 初始化显式包装 EncodableValue', () {
+      const input = 'args["data"] =\n'
+          '    flutter::EncodableMap({{"identifier", identifier}});\n';
+      final out = patchHotkeyManagerPluginCpp(input);
+      expect(out,
+          contains('flutter::EncodableValue("identifier")'));
+      expect(out, contains('flutter::EncodableValue(identifier)'));
+      expect(out,
+          isNot(contains('EncodableMap({{"identifier", identifier}})')));
+    });
+
+    test('幂等', () {
+      const input = 'flutter::EncodableMap({{"identifier", identifier}})';
+      expect(patchHotkeyManagerPluginCpp(patchHotkeyManagerPluginCpp(input)),
+          patchHotkeyManagerPluginCpp(input));
+    });
+  });
+
+  group('patchScreenRetrieverPluginH', () {
+    test('移除成员声明上的多余类名限定', () {
+      const input = '  void ScreenRetrieverWindowsPlugin::GetCursorScreenPoint(\n'
+          '  void ScreenRetrieverWindowsPlugin::GetPrimaryDisplay(\n'
+          '  void ScreenRetrieverWindowsPlugin::GetAllDisplays(\n';
+      final out = patchScreenRetrieverPluginH(input);
+      expect(out, isNot(contains('ScreenRetrieverWindowsPlugin::')));
+      expect(out, contains('void GetCursorScreenPoint('));
+      expect(out, contains('void GetPrimaryDisplay('));
+      expect(out, contains('void GetAllDisplays('));
+    });
+
+    test('幂等', () {
+      const input = 'void ScreenRetrieverWindowsPlugin::GetAllDisplays(';
+      expect(patchScreenRetrieverPluginH(patchScreenRetrieverPluginH(input)),
+          patchScreenRetrieverPluginH(input));
+    });
+  });
+
+  group('addNoDeprecatedDeclarations', () {
+    test('在 apply_standard_settings 后追加 -Wno-deprecated-declarations', () {
+      const input = 'apply_standard_settings(\${PLUGIN_NAME})\n'
+          'set_target_properties(\${PLUGIN_NAME} PROPERTIES CXX_VISIBILITY_PRESET hidden)\n';
+      final out = addNoDeprecatedDeclarations(input);
+      expect(out, contains('-Wno-deprecated-declarations'));
+      expect(out.indexOf('-Wno-deprecated-declarations'),
+          greaterThan(out.indexOf('apply_standard_settings')));
+    });
+
+    test('幂等：不重复追加', () {
+      const input = 'apply_standard_settings(\${PLUGIN_NAME})\n'
+          'target_compile_options(\${PLUGIN_NAME} PRIVATE -Wno-deprecated-declarations)\n';
+      expect(addNoDeprecatedDeclarations(input), input);
+    });
+
+    test('无 apply_standard_settings 时原样返回', () {
+      const input = 'add_library(foo SHARED foo.cpp)\n';
+      expect(addNoDeprecatedDeclarations(input), input);
+    });
+  });
+
+  // ── PluginSourcePatcher 集成 ────────────────────────────────────
+
+  test('PluginSourcePatcher 物化符号链接并应用补丁，不修改原件', () async {
+    // 创建模拟的 window_manager 插件源码
+    final pluginRoot =
+        Directory(p.join(tempDir.path, 'window_manager'))..createSync();
+    final pluginWindows = Directory(p.join(pluginRoot.path, 'windows'))
+      ..createSync();
+    File(p.join(pluginWindows.path, 'window_manager.cpp'))
+        .writeAsStringSync('#pragma once\n#include <Windows.h>\n'
+            'class WindowManager {\n'
+            '  void WindowManager::Foo();\n'
+            '};\n');
+    File(p.join(pluginWindows.path, 'CMakeLists.txt'))
+        .writeAsStringSync('apply_standard_settings(\${PLUGIN_NAME})\n');
+
+    // 在 ephemeral/.plugin_symlinks 下创建符号链接
+    final ephemeralDir = p.join(tempDir.path, 'ephemeral');
+    final symlinkDir =
+        Directory(p.join(ephemeralDir, '.plugin_symlinks'))
+          ..createSync(recursive: true);
+    Link(p.join(symlinkDir.path, 'window_manager'))
+        .createSync(pluginRoot.path);
+
+    await const PluginSourcePatcher().apply(ephemeralDir);
+
+    // 符号链接应被替换为真实目录
+    final pluginPath = p.join(symlinkDir.path, 'window_manager');
+    expect(
+      FileSystemEntity.typeSync(pluginPath, followLinks: false),
+      FileSystemEntityType.directory,
+    );
+
+    // 补丁已应用到副本
+    final cpp = File(p.join(pluginPath, 'windows', 'window_manager.cpp'))
+        .readAsStringSync();
+    expect(cpp, isNot(contains('#pragma once')));
+    expect(cpp, contains('#include <windows.h>'));
+    expect(cpp, contains('  void Foo();'));
+
+    final cmake = File(p.join(pluginPath, 'windows', 'CMakeLists.txt'))
+        .readAsStringSync();
+    expect(cmake, contains('-Wno-deprecated-declarations'));
+
+    // pub-cache 原件未被修改
+    final original =
+        File(p.join(pluginRoot.path, 'windows', 'window_manager.cpp'))
+            .readAsStringSync();
+    expect(original, contains('#pragma once'));
+    expect(original, contains('#include <Windows.h>'));
+    expect(original, contains('void WindowManager::Foo();'));
   });
 }
