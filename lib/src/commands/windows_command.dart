@@ -56,7 +56,11 @@ class WindowsCommand extends Command<int> {
       ..addFlag('copy',
           help: '构建成功后把产物拷到 config.yaml 指定的远程 Windows 机器。\n'
               '显式指定时覆盖 config 里的 auto_copy（--no-copy 可禁用）。')
-      ..addOption('config', help: '指定 config.yaml 路径（默认从当前目录向上查找）。');
+      ..addOption('config', help: '指定 config.yaml 路径（默认从当前目录向上查找）。')
+      ..addFlag('debug-console',
+          negatable: false,
+          help: '给 runner 注入调试信息：始终打开控制台并在启动失败时弹窗，\n'
+              '用于排查在 Windows 上运行后无窗口/静默退出的问题。');
   }
 
   @override
@@ -120,6 +124,7 @@ class WindowsCommand extends Command<int> {
       splitDebugInfoDir: splitDebug,
       treeShakeIcons: argResults?['tree-shake-icons'] == true,
       verbose: log.verbose,
+      debugConsole: argResults?['debug-console'] == true,
     );
 
     await BuildPipeline().run(context);

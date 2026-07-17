@@ -13,6 +13,7 @@ import '../exceptions.dart';
 import '../logger.dart';
 import '../process_runner.dart';
 import 'build_context.dart';
+import 'debug_instrumentation.dart';
 import 'flutter_ephemeral.dart';
 import 'host_env.dart';
 import 'msvc_flag_translator.dart';
@@ -57,6 +58,21 @@ class BuildPipeline {
     await _copyTree(ctx.project.windowsDir, ctx.windowsStageDir);
     await _generateFlutterEphemeral(ctx);
     await _normalizeResourceScripts(ctx);
+    if (ctx.debugConsole) await _instrumentRunner(ctx);
+  }
+
+  /// 给暂存的 runner/main.cpp 注入调试信息（始终开控制台 + 启动失败弹窗）。
+  /// 仅在 --debug-console 时调用，不影响正常发布构建。
+  Future<void> _instrumentRunner(BuildContext ctx) async {
+    final mainCpp = File(p.join(ctx.windowsStageDir, 'runner', 'main.cpp'));
+    if (!mainCpp.existsSync()) {
+      _log.debug('未找到 runner/main.cpp，跳过调试注入。');
+      return;
+    }
+    final patched = instrumentRunnerMain(await mainCpp.readAsString());
+    await mainCpp.writeAsString(patched);
+    _log.info('已注入调试信息（--debug-console）：运行时会打开控制台，'
+        '启动失败会弹 MessageBox。');
   }
 
   /// 归一化暂存目录里所有 `.rc` 资源脚本中的路径分隔符：把转义反斜杠
@@ -325,6 +341,19 @@ class BuildPipeline {
     // AOT 库（release/profile）：引擎运行时从 data/app.so 加载。
     if (ctx.mode.isAot && File(ctx.appAotElf).existsSync()) {
       await File(ctx.appAotElf).copy(p.join(dataDir, 'app.so'));
+    }
+
+    // 完整性诊断：flutter_assets 为空时醒目告警。这是本工具当前的已知缺口，
+    // 也是应用在 Windows 上“启动后无窗口/静默退出”最常见的原因——引擎找不到
+    // 资源清单会初始化失败，而 GUI 程序默认不显示任何错误。
+    final assetsEmpty = Directory(ctx.flutterAssetsDir).listSync().isEmpty;
+    if (assetsEmpty) {
+      _log.warn('data/flutter_assets 为空：尚未打包 Dart 资源'
+          '（AssetManifest / 字体等）。');
+      _log.warn('应用在 Windows 上很可能启动后无窗口/静默退出，'
+          '直到补齐 flutter_assets。');
+      _log.warn('排查启动过程可加 --debug-console 重新构建'
+          '（会打开控制台并在失败时弹窗）。');
     }
   }
 

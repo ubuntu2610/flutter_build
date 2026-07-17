@@ -26,6 +26,7 @@ class BuildContext {
     this.splitDebugInfoDir,
     this.treeShakeIcons = true,
     this.verbose = false,
+    this.debugConsole = false,
   });
 
   final FlutterEnv env;
@@ -39,6 +40,10 @@ class BuildContext {
   final String? splitDebugInfoDir;
   final bool treeShakeIcons;
   final bool verbose;
+
+  /// 是否给 runner 注入调试信息（始终开控制台 + 失败弹 MessageBox），
+  /// 用于排查在 Windows 上运行后无窗口/静默退出的问题。由 `--debug-console` 控制。
+  final bool debugConsole;
 
   /// `buildRoot/<mode>` — 当前模式的根目录。
   String get modeDir => p.join(buildRoot, mode.cliName);
