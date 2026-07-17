@@ -63,9 +63,13 @@ class FlutterEnv {
   /// Absolute path to `bin/cache/dart-sdk/bin/dart`.
   final String dartExecutable;
 
-  /// Absolute path to the linux-x64 `frontend_server.dart.snapshot`. Used to
+  /// Absolute path to the linux-x64 frontend server snapshot. Used to
   /// compile Dart source to kernel `.dill` files without shelling out to
   /// `flutter assemble`.
+  ///
+  /// 可能是现代的 `frontend_server_aot.dart.snapshot`（AOT 快照，必须用
+  /// [dartAotRuntimeExecutable] 运行）或旧版 `frontend_server.dart.snapshot`
+  /// （用 `dart` 运行）。启动时请用 [frontendServerRuntime] 选择正确的运行时。
   final String frontendServerSnapshot;
 
   /// Host engine artifacts directory (linux-x64). Used to locate
@@ -79,13 +83,32 @@ class FlutterEnv {
     // Layout:
     //   bin/cache/artifacts/engine/common/flutter_patched_sdk
     //   bin/cache/artifacts/engine/common/flutter_patched_sdk_product
-    final common =
-        p.join(p.dirname(hostEngineDir), 'common');
+    final common = p.join(p.dirname(hostEngineDir), 'common');
     return p.join(
       common,
       product ? 'flutter_patched_sdk_product' : 'flutter_patched_sdk',
     );
   }
+
+  /// Absolute path to `dartaotruntime`, the runtime for AOT snapshots such as
+  /// the modern `frontend_server_aot.dart.snapshot`. Sits next to
+  /// [dartExecutable] in `bin/cache/dart-sdk/bin/`.
+  String get dartAotRuntimeExecutable =>
+      p.join(p.dirname(dartExecutable), 'dartaotruntime');
+
+  /// Whether [frontendServerSnapshot] is an AOT snapshot. Modern Flutter
+  /// (≈ 3.16+) ships `frontend_server_aot.dart.snapshot`, which is an AOT
+  /// snapshot and must be launched with `dartaotruntime` — running it with
+  /// plain `dart` fails with "is an AOT snapshot and should be run with
+  /// 'dartaotruntime'" (exit 255).
+  bool get frontendServerIsAot =>
+      p.basename(frontendServerSnapshot).contains('_aot');
+
+  /// The correct executable to launch [frontendServerSnapshot]:
+  /// [dartAotRuntimeExecutable] for AOT snapshots, otherwise the Dart VM
+  /// ([dartExecutable]).
+  String get frontendServerRuntime =>
+      frontendServerIsAot ? dartAotRuntimeExecutable : dartExecutable;
 
   /// Locate the SDK.
   ///
@@ -123,8 +146,7 @@ class FlutterEnv {
         File(p.join(sdkRoot, 'bin', 'internal', 'engine.version'));
     final engineRealmFile =
         File(p.join(sdkRoot, 'bin', 'internal', 'engine.realm'));
-    final dartExe =
-        p.join(sdkRoot, 'bin', 'cache', 'dart-sdk', 'bin', 'dart');
+    final dartExe = p.join(sdkRoot, 'bin', 'cache', 'dart-sdk', 'bin', 'dart');
     final dartSdkVersionFile =
         File(p.join(sdkRoot, 'bin', 'cache', 'dart-sdk', 'version'));
 
@@ -187,6 +209,20 @@ class FlutterEnv {
         '${frontendServerCandidates.map((c) => '  $c').join('\n')}',
         hint: 'Run `flutter precache --linux` to populate host artifacts.',
       );
+    }
+
+    // AOT 快照（frontend_server_aot.*）必须用 `dartaotruntime` 运行，而非
+    // `dart`。提前确认运行时存在，否则在 Stage 3 才会报晦涩的 exit 255：
+    // "is an AOT snapshot and should be run with 'dartaotruntime'"。
+    if (p.basename(frontendServer).contains('_aot')) {
+      final aotRuntime = p.join(p.dirname(dartExe), 'dartaotruntime');
+      if (!File(aotRuntime).existsSync()) {
+        throw FlutterSdkException(
+          'Selected AOT frontend_server snapshot but dartaotruntime is '
+          'missing: $aotRuntime',
+          hint: 'Run `flutter doctor` once to repair the bundled Dart SDK.',
+        );
+      }
     }
 
     return FlutterEnv._(

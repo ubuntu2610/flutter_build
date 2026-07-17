@@ -34,6 +34,27 @@ extension WindowsFlavorX on WindowsFlavor {
   /// Whether the Dart VM runs in "product" mode (release-only) — matters for
   /// picking `flutter_patched_sdk_product` vs `flutter_patched_sdk`.
   bool get isProduct => this == WindowsFlavor.release;
+
+  /// frontend_server 需要的模式常量（`key=value` 形式，调用方自行加
+  /// `--define=` 前缀）。它们决定 Dart 侧的 `kReleaseMode` / `kProfileMode` /
+  /// `kDebugMode` 常量，与 `flutter_tools` 的 `buildModeOptions` 保持一致：
+  ///   - release: product=true, profile=false
+  ///   - profile: product=false, profile=true
+  ///   - debug:   两者皆 false
+  List<String> get kernelModeDefines => switch (this) {
+        WindowsFlavor.debug => const [
+            'dart.vm.profile=false',
+            'dart.vm.product=false',
+          ],
+        WindowsFlavor.profile => const [
+            'dart.vm.profile=true',
+            'dart.vm.product=false',
+          ],
+        WindowsFlavor.release => const [
+            'dart.vm.profile=false',
+            'dart.vm.product=true',
+          ],
+      };
 }
 
 /// Resolved paths to the Windows engine artifacts on disk.

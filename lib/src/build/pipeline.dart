@@ -12,6 +12,7 @@ import '../engine_artifacts.dart';
 import '../logger.dart';
 import '../process_runner.dart';
 import 'build_context.dart';
+import 'host_env.dart';
 import 'msvc_flag_translator.dart';
 import 'wine_wrapper.dart';
 
@@ -28,21 +29,21 @@ class BuildPipeline {
 
   /// 运行完整流水线。
   Future<void> run(BuildContext ctx) async {
-    await _log.group('Stage 1/6 · stage Windows CMake sources',
-        () => _stageSources(ctx));
-    await _log.group('Stage 2/6 · translate MSVC flags',
-        () => _translateFlags(ctx));
-    await _log.group('Stage 3/6 · compile Dart kernel',
-        () => _compileKernel(ctx));
+    await _log.group(
+        'Stage 1/6 · stage Windows CMake sources', () => _stageSources(ctx));
+    await _log.group(
+        'Stage 2/6 · translate MSVC flags', () => _translateFlags(ctx));
+    await _log.group(
+        'Stage 3/6 · compile Dart kernel', () => _compileKernel(ctx));
 
     if (ctx.mode.isAot) {
       await _log.group('Stage 4/6 · AOT compile', () => _aotCompile(ctx));
     }
 
-    await _log.group('Stage 5/6 · configure & build with CMake',
-        () => _buildWithCMake(ctx));
-    await _log.group('Stage 6/6 · assemble Windows bundle',
-        () => _assembleBundle(ctx));
+    await _log.group(
+        'Stage 5/6 · configure & build with CMake', () => _buildWithCMake(ctx));
+    await _log.group(
+        'Stage 6/6 · assemble Windows bundle', () => _assembleBundle(ctx));
 
     _log.success('Windows build complete: ${ctx.finalExe}');
   }
@@ -61,23 +62,44 @@ class BuildPipeline {
 
   /// 用 frontend_server 把 Dart 入口编译成 kernel `.dill`。
   Future<void> _compileKernel(BuildContext ctx) async {
+    // 参数对齐 flutter_tools 的 KernelSnapshot 目标。现代引擎用的是标准
+    // package:frontend_server AOT 快照：输出用 --output-dill（非旧版 -o），
+    // 且不认 --tree-shake-icons——图标 tree-shaking 是资源打包阶段的独立
+    // 步骤（由 IconTreeShaker 处理），不属于 frontend_server。
+    if (ctx.treeShakeIcons) {
+      _log.debug('note: icon tree-shaking 尚未在打包阶段实现，本次不生效。');
+    }
     final args = <String>[
       ctx.env.frontendServerSnapshot,
       '--sdk-root',
       ctx.env.patchedSdkPath(product: ctx.mode.isProduct),
       '--target=flutter',
-      if (ctx.treeShakeIcons) '--tree-shake-icons',
+      '--no-print-incremental-dependencies',
+      // 模式常量：决定 kReleaseMode / kProfileMode / kDebugMode。
+      for (final define in ctx.mode.kernelModeDefines) '--define=$define',
+      // debug 走 JIT，开启 asserts；AOT（release/profile）启用整程序转换，
+      // 产出 gen_snapshot 可消费的 AOT kernel。
+      if (!ctx.mode.isAot) '--enable-asserts',
+      if (ctx.mode.isAot) ...['--aot', '--tfa'],
+      // 用户自定义 --dart-define。
       for (final define in ctx.dartDefines) '--define=$define',
-      '-o',
+      '--packages',
+      ctx.project.packageConfig,
+      '--output-dill',
       ctx.kernelDill,
       ctx.project.entryPoint,
     ];
-    await _runner.run(ctx.env.dartExecutable, args, tag: 'frontend_server');
+    // frontend_server_aot.dart.snapshot 是 AOT 快照，必须用 dartaotruntime
+    // 运行；旧版 frontend_server.dart.snapshot 才用 dart。由 env 按快照类型
+    // 自动选择正确的运行时，避免 exit 255。
+    await _runner.run(ctx.env.frontendServerRuntime, args,
+        tag: 'frontend_server');
   }
 
   /// 用 gen_snapshot 把 kernel 编译为 AOT elf（release / profile）。
   Future<void> _aotCompile(BuildContext ctx) async {
-    final wine = WineWrapper(toolchain: ctx.toolchain, buildRoot: ctx.buildRoot);
+    final wine =
+        WineWrapper(toolchain: ctx.toolchain, buildRoot: ctx.buildRoot);
     await wine.materialize();
 
     final args = <String>[
@@ -100,7 +122,8 @@ class BuildPipeline {
 
   /// 配置并构建 CMake 工程（用 LLVM-MinGW 工具链）。
   Future<void> _buildWithCMake(BuildContext ctx) async {
-    final wine = WineWrapper(toolchain: ctx.toolchain, buildRoot: ctx.buildRoot);
+    final wine =
+        WineWrapper(toolchain: ctx.toolchain, buildRoot: ctx.buildRoot);
     await wine.materialize();
     await Directory(ctx.cmakeBuildDir).create(recursive: true);
 
@@ -117,18 +140,28 @@ class BuildPipeline {
       '-DCMAKE_RC_COMPILER=${ctx.toolchain.llvmRc}',
       '-DCMAKE_MAKE_PROGRAM=${ctx.toolchain.ninjaExecutable}',
     ];
+    // 用净化过的环境驱动 CMake：剥离宿主（如 Flutter snap）注入的
+    // CFLAGS/CXXFLAGS/LDFLAGS 等，否则 -lepoxy/-lfontconfig 等 Linux 库会
+    // 漏进面向 Windows 的交叉链接。配合 includeParentEnvironment=false，
+    // 确保被剥离的变量不会再从父进程合并回来。
+    final crossEnv = sanitizedCrossBuildEnv(
+      Platform.environment,
+      overrides: wine.environment(),
+    );
     await _runner.run(
       ctx.toolchain.cmakeExecutable,
       configureArgs,
       tag: 'cmake',
-      environment: wine.environment(),
+      environment: crossEnv,
+      includeParentEnvironment: false,
     );
 
     await _runner.run(
       ctx.toolchain.cmakeExecutable,
       <String>['--build', ctx.cmakeBuildDir],
       tag: 'cmake',
-      environment: wine.environment(),
+      environment: crossEnv,
+      includeParentEnvironment: false,
     );
   }
 

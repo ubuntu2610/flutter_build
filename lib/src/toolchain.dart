@@ -41,8 +41,16 @@ class LlvmMingwRelease {
   /// `ucrt` (recommended, modern CRT) or `msvcrt` (legacy).
   final String crt;
 
-  /// Best-match Ubuntu tag from mstorsjo/llvm-mingw releases. `ubuntu-20.04`
-  /// stays compatible with newer Ubuntu (glibc forward-compat).
+  /// The Ubuntu tag of this release's Linux x86_64 build.
+  ///
+  /// 注意：这是工具链**被编译时所在的构建机** Ubuntu 版本，不是对运行
+  /// 系统的要求。llvm-mingw 每个 release 的 Linux x86_64 只发布**一个**
+  /// 构建，故意选用较老的 Ubuntu，使其 glibc 足够老，从而向前兼容所有
+  /// 更新的发行版（新系统能跑旧二进制，反之不行）。因此在 Ubuntu 22.04 /
+  /// 24.04 上运行 `ubuntu-20.04` 构建是完全正常的。
+  ///
+  /// 该 tag 由 [linuxTagForVersion] 按 release 版本解析，随版本自动切换，
+  /// 避免升级 [version] 后仍用旧 tag 导致下载 404。
   final String linuxDistroTag;
 
   /// Optional expected sha256 of the tarball (hex). If null, integrity is
@@ -56,17 +64,52 @@ class LlvmMingwRelease {
       'https://github.com/mstorsjo/llvm-mingw/releases/download/'
       '$version/$archiveName';
 
-  String get extractedDirName => 'llvm-mingw-$version-$crt-$linuxDistroTag-x86_64';
+  String get extractedDirName =>
+      'llvm-mingw-$version-$crt-$linuxDistroTag-x86_64';
+
+  /// 各 release 版本对应的 Linux x86_64 构建 Ubuntu tag。
+  ///
+  /// llvm-mingw 不为每个 Ubuntu 版本单独发包，而是每个 release 只有一个
+  /// Linux 构建，其 tag 随 release 变化（例如 20240619 用 ubuntu-20.04，
+  /// 20260616 用 ubuntu-22.04）。升级 [defaultLlvmMingw] 的 version 时，
+  /// 在此登记对应 tag 即可。
+  static const Map<String, String> _linuxTagByVersion = {
+    '20240619': 'ubuntu-20.04',
+    '20260616': 'ubuntu-22.04',
+  };
+
+  /// 未登记版本的后备 tag。选用已知最老的构建以最大化 glibc 向前兼容性。
+  static const String _fallbackLinuxTag = 'ubuntu-20.04';
+
+  /// 按 release 版本解析 Linux x86_64 构建的 Ubuntu tag。
+  static String linuxTagForVersion(String version) =>
+      _linuxTagByVersion[version] ?? _fallbackLinuxTag;
+
+  /// 以指定版本构造 release，自动解析匹配的 Linux distro tag。
+  factory LlvmMingwRelease.pinned({
+    String version = '20240619',
+    String crt = 'ucrt',
+    String? sha256,
+  }) =>
+      LlvmMingwRelease(
+        version: version,
+        crt: crt,
+        linuxDistroTag: linuxTagForVersion(version),
+        sha256: sha256,
+      );
 }
 
 /// Default LLVM-MinGW release we ship against.
 ///
-/// This is intentionally pinned. To bump: update `version`, download the
-/// tarball once, compute sha256, paste it below.
-const LlvmMingwRelease defaultLlvmMingw = LlvmMingwRelease(
+/// This is intentionally pinned. To bump: update `version` in the factory
+/// call below, register its Linux tag in [LlvmMingwRelease._linuxTagByVersion],
+/// download the tarball once, compute sha256, and pass it here.
+///
+/// `linuxDistroTag` 不再硬编码，而是由 [LlvmMingwRelease.linuxTagForVersion]
+/// 按 version 自动解析。
+final LlvmMingwRelease defaultLlvmMingw = LlvmMingwRelease.pinned(
   version: '20240619',
   crt: 'ucrt',
-  linuxDistroTag: 'ubuntu-20.04',
   // sha256: 'fill-in-once-verified',
 );
 
@@ -200,8 +243,8 @@ class ToolchainProvisioner {
         await _detectRequired('ninja', 'sudo apt install ninja-build');
 
     // ─── 策略 1：用户显式指定路径 ───
-    final explicitRoot = toolchainPathOverride ??
-        Platform.environment['LLVM_MINGW_ROOT'];
+    final explicitRoot =
+        toolchainPathOverride ?? Platform.environment['LLVM_MINGW_ROOT'];
     if (explicitRoot != null && explicitRoot.isNotEmpty) {
       _log.debug('使用用户指定的工具链: $explicitRoot');
       _validateLlvmMingwDir(explicitRoot);

@@ -33,5 +33,14 @@ void main() {
       expect(WindowsFlavor.profile.cliName, 'profile');
       expect(WindowsFlavor.release.cliName, 'release');
     });
+
+    test('kernelModeDefines 与构建模式匹配', () {
+      expect(WindowsFlavor.release.kernelModeDefines,
+          containsAll(['dart.vm.product=true', 'dart.vm.profile=false']));
+      expect(WindowsFlavor.profile.kernelModeDefines,
+          containsAll(['dart.vm.product=false', 'dart.vm.profile=true']));
+      expect(WindowsFlavor.debug.kernelModeDefines,
+          containsAll(['dart.vm.product=false', 'dart.vm.profile=false']));
+    });
   });
 }

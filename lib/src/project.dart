@@ -42,7 +42,8 @@ class WindowsPluginRef {
 
   String get windowsCMakeDir => p.join(rootPath, 'windows');
 
-  bool get hasNativeCode => File(p.join(windowsCMakeDir, 'CMakeLists.txt')).existsSync();
+  bool get hasNativeCode =>
+      File(p.join(windowsCMakeDir, 'CMakeLists.txt')).existsSync();
 }
 
 class FlutterProject {
@@ -80,9 +81,15 @@ class FlutterProject {
   String get windowsRunnerDir => p.join(windowsDir, 'runner');
   String get windowsFlutterDir => p.join(windowsDir, 'flutter');
 
+  /// `.dart_tool/package_config.json` — produced by `flutter pub get`. Needed
+  /// by frontend_server to resolve `package:` imports. [load] verifies it
+  /// exists before construction.
+  String get packageConfig => p.join(root, '.dart_tool', 'package_config.json');
+
   /// Load the project rooted at [projectRoot] (defaults to CWD).
   static Future<FlutterProject> load({String? projectRoot}) async {
-    final root = p.normalize(Directory(projectRoot ?? Directory.current.path).absolute.path);
+    final root = p.normalize(
+        Directory(projectRoot ?? Directory.current.path).absolute.path);
 
     final pubspecFile = File(p.join(root, 'pubspec.yaml'));
     if (!pubspecFile.existsSync()) {
@@ -108,7 +115,8 @@ class FlutterProject {
       );
     }
 
-    final packageConfig = File(p.join(root, '.dart_tool', 'package_config.json'));
+    final packageConfig =
+        File(p.join(root, '.dart_tool', 'package_config.json'));
     if (!packageConfig.existsSync()) {
       throw ProjectException(
         'Missing .dart_tool/package_config.json.',
@@ -152,10 +160,14 @@ class FlutterProject {
       ..writeln('set(PLUGIN_BUNDLED_LIBRARIES)')
       ..writeln('')
       ..writeln('foreach(plugin \${FLUTTER_PLUGIN_LIST})')
-      ..writeln('  add_subdirectory(flutter/ephemeral/.plugin_symlinks/\${plugin}/windows plugins/\${plugin})')
-      ..writeln('  target_link_libraries(\${BINARY_NAME} PRIVATE \${plugin}_plugin)')
-      ..writeln('  list(APPEND PLUGIN_BUNDLED_LIBRARIES \$<TARGET_FILE:\${plugin}_plugin>)')
-      ..writeln('  list(APPEND PLUGIN_BUNDLED_LIBRARIES \${\${plugin}_bundled_libraries})')
+      ..writeln(
+          '  add_subdirectory(flutter/ephemeral/.plugin_symlinks/\${plugin}/windows plugins/\${plugin})')
+      ..writeln(
+          '  target_link_libraries(\${BINARY_NAME} PRIVATE \${plugin}_plugin)')
+      ..writeln(
+          '  list(APPEND PLUGIN_BUNDLED_LIBRARIES \$<TARGET_FILE:\${plugin}_plugin>)')
+      ..writeln(
+          '  list(APPEND PLUGIN_BUNDLED_LIBRARIES \${\${plugin}_bundled_libraries})')
       ..writeln('endforeach(plugin)');
     return buf.toString();
   }
