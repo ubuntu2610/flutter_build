@@ -86,6 +86,10 @@ class FlutterProject {
   /// exists before construction.
   String get packageConfig => p.join(root, '.dart_tool', 'package_config.json');
 
+  /// pubspec 的 `version` 字段（如 `1.0.0+1`）。用于生成 ephemeral/
+  /// generated_config.cmake 里的 FLUTTER_VERSION* 变量。缺省时为 null。
+  String? get versionString => pubspec['version']?.toString();
+
   /// Load the project rooted at [projectRoot] (defaults to CWD).
   static Future<FlutterProject> load({String? projectRoot}) async {
     final root = p.normalize(

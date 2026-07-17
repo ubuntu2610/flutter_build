@@ -181,6 +181,14 @@ class Toolchain {
   /// 是否使用 LLD 链接器（仅 LLVM-MinGW 后端）。
   bool get usesLld => backend == ToolchainBackend.llvmMingw;
 
+  /// mingw-w64 sysroot 头文件目录，例如
+  /// `<root>/x86_64-w64-mingw32/include`。clang 驱动已内置该搜索路径，
+  /// 但资源编译器 llvm-rc 没有 —— 编译 .rc 时需显式用 `-I` 传入，否则
+  /// 会报 `'winres.h' file not found`。对 llvmMingw 与系统 GCC-MinGW（root=/usr）
+  /// 两种布局都成立。
+  String get mingwSysrootInclude =>
+      p.join(llvmMingwRoot, targetTriple, 'include');
+
   Map<String, String> describe() => {
         'Backend': backend == ToolchainBackend.llvmMingw
             ? 'LLVM-MinGW'

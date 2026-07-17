@@ -12,6 +12,7 @@ import '../engine_artifacts.dart';
 import '../logger.dart';
 import '../process_runner.dart';
 import 'build_context.dart';
+import 'flutter_ephemeral.dart';
 import 'host_env.dart';
 import 'msvc_flag_translator.dart';
 import 'wine_wrapper.dart';
@@ -53,6 +54,93 @@ class BuildPipeline {
     await Directory(ctx.intermediatesDir).create(recursive: true);
     await Directory(ctx.windowsStageDir).create(recursive: true);
     await _copyTree(ctx.project.windowsDir, ctx.windowsStageDir);
+    await _generateFlutterEphemeral(ctx);
+    await _normalizeResourceScripts(ctx);
+  }
+
+  /// 归一化暂存目录里所有 `.rc` 资源脚本中的路径分隔符：把转义反斜杠
+  /// `\\` 换成 `/`。llvm-rc 在 Linux 上不把 `\` 当路径分隔符，导致图标等
+  /// 资源文件（如 `resources\\app_icon.ico`）找不到；`/` 在 Windows/Linux 下
+  /// 均可用。
+  Future<void> _normalizeResourceScripts(BuildContext ctx) async {
+    final dir = Directory(ctx.windowsStageDir);
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync(recursive: true)) {
+      if (entity is! File) continue;
+      if (p.extension(entity.path).toLowerCase() != '.rc') continue;
+      final content = await entity.readAsString();
+      if (!content.contains(r'\\')) continue;
+      await entity.writeAsString(content.replaceAll(r'\\', '/'));
+    }
+  }
+
+  /// CMAKE_SYSTEM_NAME 只在**干净配置**时生效。若 cmake_build 里存在此前以非
+  /// Windows（如本机 Linux）模式配置的旧缓存，直接重配不会切换到交叉模式，
+  /// 会继续报 RPATH 等错。此时删除 CMakeCache.txt 与 CMakeFiles/ 强制干净重配；
+  /// 已是 Windows 交叉配置则保留，维持增量构建。
+  Future<void> _ensureCleanCrossCache(BuildContext ctx) async {
+    final cache = File(p.join(ctx.cmakeBuildDir, 'CMakeCache.txt'));
+    if (!cache.existsSync()) return;
+    final content = await cache.readAsString();
+    final isWindowsCross = RegExp(
+      r'^CMAKE_SYSTEM_NAME[^=\n]*=\s*Windows\s*$',
+      multiLine: true,
+    ).hasMatch(content);
+    if (isWindowsCross) return;
+    _log.debug('检测到非 Windows 交叉配置的旧 CMake 缓存，清理后重新配置。');
+    await cache.delete();
+    final cmakeFiles = Directory(p.join(ctx.cmakeBuildDir, 'CMakeFiles'));
+    if (cmakeFiles.existsSync()) await cmakeFiles.delete(recursive: true);
+  }
+
+  /// 生成 `flutter/ephemeral/`：铺入嵌入器文件 + 写 generated_config.cmake +
+  /// 中和 flutter_assemble。正常由 `flutter build windows` 完成，交叉构建下必
+  /// 须自行生成，否则 flutter/CMakeLists.txt 会因找不到 generated_config.cmake
+  /// 而配置失败。
+  Future<void> _generateFlutterEphemeral(BuildContext ctx) async {
+    final stagedFlutterDir = p.join(ctx.windowsStageDir, 'flutter');
+    final ephemeralDir = p.join(stagedFlutterDir, 'ephemeral');
+    await Directory(ephemeralDir).create(recursive: true);
+
+    final art = ctx.artifacts;
+    // 嵌入器动态库 + 导入库。
+    await _copyFileIfExists(
+        art.flutterWindowsDll, p.join(ephemeralDir, 'flutter_windows.dll'));
+    await _copyFileIfExists(art.flutterWindowsImportLib,
+        p.join(ephemeralDir, 'flutter_windows.dll.lib'));
+    // 嵌入器头文件。
+    for (final h in kEmbedderHeaders) {
+      await _copyFileIfExists(
+          p.join(art.embedderDir, h), p.join(ephemeralDir, h));
+    }
+    // C++ 客户端包装层（递归）。
+    await _copyTree(
+        art.cppClientWrapperDir, p.join(ephemeralDir, 'cpp_client_wrapper'));
+    // icudtl.dat（兼容每平台 / 共享两种布局）。
+    await _copyFileIfExists(art.icudtl, p.join(ephemeralDir, 'icudtl.dat'));
+
+    // generated_config.cmake。
+    final version = parseFlutterVersion(ctx.project.versionString);
+    await File(p.join(ephemeralDir, 'generated_config.cmake')).writeAsString(
+      renderGeneratedConfigCmake(
+        flutterRoot: ctx.env.sdkRoot,
+        projectDir: ctx.project.root,
+        version: version,
+      ),
+    );
+
+    // 中和 flutter/CMakeLists.txt 里依赖 tool_backend.bat 的 flutter_assemble。
+    final flutterCmake = File(p.join(stagedFlutterDir, 'CMakeLists.txt'));
+    if (flutterCmake.existsSync()) {
+      final original = await flutterCmake.readAsString();
+      final patched = neutralizeFlutterAssemble(original);
+      if (patched == original) {
+        _log.debug('flutter/CMakeLists.txt 未找到 tool backend 标记，'
+            '跳过 flutter_assemble 中和（可能是非标准模板）。');
+      } else {
+        await flutterCmake.writeAsString(patched);
+      }
+    }
   }
 
   /// 翻译暂存目录里所有 CMakeLists.txt 的 MSVC 标志。
@@ -126,6 +214,7 @@ class BuildPipeline {
         WineWrapper(toolchain: ctx.toolchain, buildRoot: ctx.buildRoot);
     await wine.materialize();
     await Directory(ctx.cmakeBuildDir).create(recursive: true);
+    await _ensureCleanCrossCache(ctx);
 
     final configureArgs = <String>[
       '-S',
@@ -134,11 +223,28 @@ class BuildPipeline {
       ctx.cmakeBuildDir,
       '-G',
       'Ninja',
+      // 告知 CMake 这是面向 Windows 的交叉构建，否则它会当作本机 Linux
+      // （ELF）处理，导致对可执行文件套用 RPATH 逻辑而报错，也会用错
+      // .exe/.dll/导入库的命名与链接规则。必须在干净配置时设置（见
+      // _ensureCleanCrossCache）。
+      '-DCMAKE_SYSTEM_NAME=Windows',
+      '-DCMAKE_SYSTEM_PROCESSOR=AMD64',
       '-DCMAKE_BUILD_TYPE=${ctx.mode.name.toUpperCase()}',
       '-DCMAKE_C_COMPILER=${ctx.toolchain.clang}',
       '-DCMAKE_CXX_COMPILER=${ctx.toolchain.clangxx}',
       '-DCMAKE_RC_COMPILER=${ctx.toolchain.llvmRc}',
+      // 资源编译器 llvm-rc 没有 clang 的 sysroot，需显式加 mingw include
+      // 才能找到 winres.h 等系统头。
+      '-DCMAKE_RC_FLAGS=-I ${ctx.toolchain.mingwSysrootInclude}',
       '-DCMAKE_MAKE_PROGRAM=${ctx.toolchain.ninjaExecutable}',
+      // 强制清空全局链接标志：覆盖宿主（Flutter snap）经 env.sh 向
+      // LDFLAGS 注入的 -lepoxy/-lfontconfig 等 Linux 库。命令行 -D 会压过
+      // 环境初始化值，也会覆盖之前失败运行遗留在 CMakeCache.txt 里的
+      // 被污染值（自愈）。目标库由 CMake 工程自身经 target_link_libraries
+      // 指定，不依赖这些全局标志。
+      '-DCMAKE_EXE_LINKER_FLAGS=',
+      '-DCMAKE_SHARED_LINKER_FLAGS=',
+      '-DCMAKE_MODULE_LINKER_FLAGS=',
     ];
     // 用净化过的环境驱动 CMake：剥离宿主（如 Flutter snap）注入的
     // CFLAGS/CXXFLAGS/LDFLAGS 等，否则 -lepoxy/-lfontconfig 等 Linux 库会
@@ -183,6 +289,14 @@ class BuildPipeline {
         await File(src).copy(p.join(outDir, p.basename(src)));
       }
     }
+  }
+
+  /// 复制单个文件；源不存在时静默跳过（与 [_copyTree] 一致）。
+  Future<void> _copyFileIfExists(String src, String dst) async {
+    final f = File(src);
+    if (!f.existsSync()) return;
+    await Directory(p.dirname(dst)).create(recursive: true);
+    await f.copy(dst);
   }
 
   /// 递归复制目录树。源不存在时静默跳过。
