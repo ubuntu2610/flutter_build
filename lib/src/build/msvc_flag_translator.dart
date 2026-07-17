@@ -23,7 +23,7 @@ class MsvcFlagTranslator {
     final dir = Directory(rootPath);
     if (!dir.existsSync()) return;
 
-    for (final entity in dir.listSync(recursive: true)) {
+    for (final entity in dir.listSync(recursive: true, followLinks: false)) {
       if (entity is! File) continue;
       if (p.basename(entity.path) != 'CMakeLists.txt') continue;
 
@@ -87,8 +87,8 @@ class MsvcFlagTranslator {
     );
     return content.replaceAllMapped(re, (match) {
       final header = match.group(0)!;
-      final nameMatch =
-          RegExp(r'function\(APPLY_STANDARD_SETTINGS\s+(\w+)').firstMatch(header);
+      final nameMatch = RegExp(r'function\(APPLY_STANDARD_SETTINGS\s+(\w+)')
+          .firstMatch(header);
       final param = nameMatch?.group(1) ?? 'target';
       return '# Translated by flutter_build: MSVC-only settings replaced with\n'
           '# GCC/Clang equivalents so the macro still resolves under MinGW.\n'

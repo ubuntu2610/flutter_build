@@ -19,6 +19,50 @@ import 'host_env.dart';
 import 'msvc_flag_translator.dart';
 import 'wine_wrapper.dart';
 
+/// 递归复制目录树，但不跟随符号链接。
+///
+/// 这对 Flutter `windows/flutter/ephemeral/.plugin_symlinks/` 很关键：
+/// 插件链接通常指向包根目录；若跟随它们，示例工程里的 `build/` 会被重新扫进
+/// 暂存目录，进而把 `windows_src/flutter/ephemeral/.plugin_symlinks/...` 自身
+/// 再复制一遍，形成无限嵌套路径。
+Future<void> copyTreePreservingLinks(String src, String dst) async {
+  final dir = Directory(src);
+  if (!dir.existsSync()) return;
+  await Directory(dst).create(recursive: true);
+
+  for (final entity in dir.listSync(recursive: false, followLinks: false)) {
+    final target = p.join(dst, p.basename(entity.path));
+    if (entity is Directory) {
+      await copyTreePreservingLinks(entity.path, target);
+    } else if (entity is File) {
+      await entity.copy(target);
+    } else if (entity is Link) {
+      // 复制链接时改写为真实绝对目标，避免把“相对链接字符串”原样搬到新目录后
+      // 变成坏链。Flutter 的 .plugin_symlinks 通常就是相对链接。
+      await Link(target)
+          .create(entity.resolveSymbolicLinksSync(), recursive: true);
+    }
+  }
+}
+
+/// 在 `flutter/ephemeral/.plugin_symlinks/` 下为每个原生 Windows 插件创建链接。
+///
+/// 不依赖源工程里是否已经跑过 `flutter build windows`；交叉构建时统一在暂存目录
+/// 里重建，既避免缺失，也避免继承旧的坏链或循环链接。
+Future<void> materializePluginSymlinks(
+    BuildContext ctx, String ephemeralDir) async {
+  final symlinkDir = Directory(p.join(ephemeralDir, '.plugin_symlinks'));
+  if (symlinkDir.existsSync()) {
+    await symlinkDir.delete(recursive: true);
+  }
+  await symlinkDir.create(recursive: true);
+
+  for (final plugin in ctx.project.plugins.where((p) => p.hasNativeCode)) {
+    await Link(p.join(symlinkDir.path, plugin.name))
+        .create(plugin.rootPath, recursive: true);
+  }
+}
+
 /// 编排 Windows 交叉构建的整个流程。
 class BuildPipeline {
   BuildPipeline({
@@ -82,7 +126,7 @@ class BuildPipeline {
   Future<void> _normalizeResourceScripts(BuildContext ctx) async {
     final dir = Directory(ctx.windowsStageDir);
     if (!dir.existsSync()) return;
-    for (final entity in dir.listSync(recursive: true)) {
+    for (final entity in dir.listSync(recursive: true, followLinks: false)) {
       if (entity is! File) continue;
       if (p.extension(entity.path).toLowerCase() != '.rc') continue;
       final content = await entity.readAsString();
@@ -141,6 +185,8 @@ class BuildPipeline {
         art.cppClientWrapperDir, p.join(ephemeralDir, 'cpp_client_wrapper'));
     // icudtl.dat（兼容每平台 / 共享两种布局）。
     await _copyFileIfExists(art.icudtl, p.join(ephemeralDir, 'icudtl.dat'));
+    // 重新生成插件链接，避免依赖源工程里已有的 ephemeral/.plugin_symlinks。
+    await materializePluginSymlinks(ctx, ephemeralDir);
 
     // generated_config.cmake。
     final version = parseFlutterVersion(ctx.project.versionString);
@@ -415,17 +461,6 @@ class BuildPipeline {
 
   /// 递归复制目录树。源不存在时静默跳过。
   Future<void> _copyTree(String src, String dst) async {
-    final dir = Directory(src);
-    if (!dir.existsSync()) return;
-    await Directory(dst).create(recursive: true);
-
-    for (final entity in dir.listSync(recursive: false)) {
-      final target = p.join(dst, p.basename(entity.path));
-      if (entity is Directory) {
-        await _copyTree(entity.path, target);
-      } else if (entity is File) {
-        await File(entity.path).copy(target);
-      }
-    }
+    await copyTreePreservingLinks(src, dst);
   }
 }
