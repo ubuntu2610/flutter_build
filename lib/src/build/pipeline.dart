@@ -9,6 +9,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../engine_artifacts.dart';
+import '../exceptions.dart';
 import '../logger.dart';
 import '../process_runner.dart';
 import 'build_context.dart';
@@ -75,9 +76,13 @@ class BuildPipeline {
   }
 
   /// CMAKE_SYSTEM_NAME 只在**干净配置**时生效。若 cmake_build 里存在此前以非
-  /// Windows（如本机 Linux）模式配置的旧缓存，直接重配不会切换到交叉模式，
-  /// 会继续报 RPATH 等错。此时删除 CMakeCache.txt 与 CMakeFiles/ 强制干净重配；
-  /// 已是 Windows 交叉配置则保留，维持增量构建。
+  /// Windows（如本机 Linux）模式配置的旧缓存，或上次配置未走完留下的
+  /// 半成品缓存，直接重配都不会正确切换到交叉模式（会继续报 RPATH 等错）。
+  /// 用两个信号判定“健康的 Windows 交叉缓存”：
+  ///   1. CMakeCache.txt 里 CMAKE_SYSTEM_NAME=Windows；
+  ///   2. build.ninja 存在（只有 configure+generate 完整成功才会生成）。
+  /// 不满足则删除 CMakeCache.txt 与 CMakeFiles/ 强制干净重配；满足则保留，
+  /// 维持增量构建。
   Future<void> _ensureCleanCrossCache(BuildContext ctx) async {
     final cache = File(p.join(ctx.cmakeBuildDir, 'CMakeCache.txt'));
     if (!cache.existsSync()) return;
@@ -86,8 +91,10 @@ class BuildPipeline {
       r'^CMAKE_SYSTEM_NAME[^=\n]*=\s*Windows\s*$',
       multiLine: true,
     ).hasMatch(content);
-    if (isWindowsCross) return;
-    _log.debug('检测到非 Windows 交叉配置的旧 CMake 缓存，清理后重新配置。');
+    final generated =
+        File(p.join(ctx.cmakeBuildDir, 'build.ninja')).existsSync();
+    if (isWindowsCross && generated) return;
+    _log.debug('清理不完整或非 Windows 交叉的 CMake 缓存后重新配置。');
     await cache.delete();
     final cmakeFiles = Directory(p.join(ctx.cmakeBuildDir, 'CMakeFiles'));
     if (cmakeFiles.existsSync()) await cmakeFiles.delete(recursive: true);
@@ -229,6 +236,10 @@ class BuildPipeline {
       // _ensureCleanCrossCache）。
       '-DCMAKE_SYSTEM_NAME=Windows',
       '-DCMAKE_SYSTEM_PROCESSOR=AMD64',
+      // 让 CMake 的编译器检测只编译成静态库、不链接可执行文件。
+      // 否则在干净配置时，因为下面给 EXE 加了 -municode，而检测用的
+      // 测试程序只有 main（非 wWinMain），会报 `undefined symbol: wWinMain`。
+      '-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY',
       '-DCMAKE_BUILD_TYPE=${ctx.mode.name.toUpperCase()}',
       '-DCMAKE_C_COMPILER=${ctx.toolchain.clang}',
       '-DCMAKE_CXX_COMPILER=${ctx.toolchain.clangxx}',
@@ -237,12 +248,15 @@ class BuildPipeline {
       // 才能找到 winres.h 等系统头。
       '-DCMAKE_RC_FLAGS=-I ${ctx.toolchain.mingwSysrootInclude}',
       '-DCMAKE_MAKE_PROGRAM=${ctx.toolchain.ninjaExecutable}',
-      // 强制清空全局链接标志：覆盖宿主（Flutter snap）经 env.sh 向
-      // LDFLAGS 注入的 -lepoxy/-lfontconfig 等 Linux 库。命令行 -D 会压过
-      // 环境初始化值，也会覆盖之前失败运行遗留在 CMakeCache.txt 里的
-      // 被污染值（自愈）。目标库由 CMake 工程自身经 target_link_libraries
-      // 指定，不依赖这些全局标志。
-      '-DCMAKE_EXE_LINKER_FLAGS=',
+      // 强制指定全局链接标志，起到两个作用：
+      // 1) 覆盖宿主（Flutter snap）经 env.sh 向 LDFLAGS 注入的
+      //    -lepoxy/-lfontconfig 等 Linux 库（命令行 -D 会压过环境初始化值，
+      //    也会覆盖旧缓存里的被污染值）；
+      // 2) EXE 加 -municode：选用宽字符入口 CRT，匹配 Flutter runner 的
+      //    wWinMain；否则 mingw 的 crtexewin 引用窄字符 WinMain 导致
+      //    `undefined symbol: WinMain`。
+      // 目标库由 CMake 工程经 target_link_libraries 指定，不依赖这些。
+      '-DCMAKE_EXE_LINKER_FLAGS=-municode',
       '-DCMAKE_SHARED_LINKER_FLAGS=',
       '-DCMAKE_MODULE_LINKER_FLAGS=',
     ];
@@ -271,24 +285,69 @@ class BuildPipeline {
     );
   }
 
-  /// 把构建产物（exe / dll / icu / assets 目录）组装到最终输出目录。
+  /// 把构建产物组装到最终输出目录，布局与 Windows 上 `flutter build` 一致：
+  ///   <app>/
+  ///     <app>.exe
+  ///     flutter_windows.dll
+  ///     data/
+  ///       icudtl.dat
+  ///       app.so            (release/profile)
+  ///       flutter_assets/   (目录已创建；内容由后续资源打包填充)
   Future<void> _assembleBundle(BuildContext ctx) async {
     final outDir = p.dirname(ctx.finalExe);
+    final dataDir = p.join(outDir, 'data');
     await Directory(outDir).create(recursive: true);
     await Directory(ctx.flutterAssetsDir).create(recursive: true);
 
-    final builtExe = p.join(ctx.cmakeBuildDir, '${ctx.project.appName}.exe');
-    if (File(builtExe).existsSync()) {
-      await File(builtExe).copy(ctx.finalExe);
+    // runner 可执行文件：Ninja 会把它放在 cmake_build/runner/<name>.exe
+    // （而非 cmake_build/ 根）。找不到则报错，避免谎报成功。
+    final builtExe = _findBuiltExe(ctx);
+    if (builtExe == null) {
+      throw ArtifactException(
+        '构建成功但未在 ${ctx.cmakeBuildDir} 下找到 '
+        '${ctx.project.appName}.exe。',
+      );
     }
-    for (final src in <String>[
-      ctx.artifacts.flutterWindowsDll,
-      ctx.artifacts.icudtl,
+    await builtExe.copy(ctx.finalExe);
+
+    // 嵌入器动态库与 exe 同级；icu 放 data/。
+    if (File(ctx.artifacts.flutterWindowsDll).existsSync()) {
+      await File(ctx.artifacts.flutterWindowsDll)
+          .copy(p.join(outDir, 'flutter_windows.dll'));
+    }
+    await Directory(dataDir).create(recursive: true);
+    if (File(ctx.artifacts.icudtl).existsSync()) {
+      await File(ctx.artifacts.icudtl).copy(p.join(dataDir, 'icudtl.dat'));
+    }
+
+    // AOT 库（release/profile）：引擎运行时从 data/app.so 加载。
+    if (ctx.mode.isAot && File(ctx.appAotElf).existsSync()) {
+      await File(ctx.appAotElf).copy(p.join(dataDir, 'app.so'));
+    }
+  }
+
+  /// 定位 CMake 构出的 runner 可执行文件。优先常见位置（runner/ 子目录），
+  /// 其次根目录，最后递归兵底（跳过 CMakeFiles/ 里的编译器检测产物）。
+  File? _findBuiltExe(BuildContext ctx) {
+    final name = '${ctx.project.appName}.exe';
+    for (final c in <String>[
+      p.join(ctx.cmakeBuildDir, 'runner', name),
+      p.join(ctx.cmakeBuildDir, name),
     ]) {
-      if (File(src).existsSync()) {
-        await File(src).copy(p.join(outDir, p.basename(src)));
+      if (File(c).existsSync()) return File(c);
+    }
+    final dir = Directory(ctx.cmakeBuildDir);
+    if (dir.existsSync()) {
+      final sep = p.separator;
+      for (final e in dir.listSync(recursive: true)) {
+        if (e is File &&
+            p.basename(e.path) == name &&
+            !e.path.contains('${sep}CMakeFiles$sep')) {
+          return e;
+        }
       }
     }
+    return null;
   }
 
   /// 复制单个文件；源不存在时静默跳过（与 [_copyTree] 一致）。
