@@ -11,7 +11,10 @@
 //      stdout/stderr 到 CONOUT$ 并调用 FlutterDesktopResyncOutputStreams()，
 //      使引擎日志实时显示在该控制台；
 //   2) 启动失败时弹 MessageBox —— 双击（无父控制台）时控制台会一闪而过，
-//      弹框可确保失败信息不被错过。
+//      弹框可确保失败信息不被错过；
+//   3) 运行时保持占用启动它的控制台，关闭程序（窗口）后才释放控制台并
+//      干净退出——即 PowerShell/cmd 在程序运行期间不会回到提示符，关闭
+//      程序后才回到提示符，避免“关掉程序后控制台不退出 / 日志丢失”。
 //
 // 只放纯函数（便于单测）；实际读写文件由 pipeline 编排。默认开启，可用
 // `--no-debug-console` 关闭（发布干净版本时）。
@@ -31,6 +34,9 @@ const String _consoleBlock =
 /// runner 启动失败时的静默返回点。
 const String _failReturn = 'return EXIT_FAILURE;';
 
+/// runner 正常退出点（窗口被关闭、消息循环结束后）。
+const String _successReturn = 'return EXIT_SUCCESS;';
+
 /// 给 [source]（runner/main.cpp 内容）注入调试代码，返回改写后的内容。幂等。
 String instrumentRunnerMain(String source) {
   if (source.contains(_sentinel)) return source;
@@ -49,6 +55,8 @@ String instrumentRunnerMain(String source) {
 
   // 2) 始终把引擎日志接到启动它的控制台（PowerShell/cmd），没有父控制台
   //    （如双击）时新建一个；随后重开标准流并让引擎重新同步。
+  //    控制台会一直保持附着，直到下方的正常/失败退出点释放——因此程序
+  //    运行期间 PowerShell/cmd 不会回到提示符，关闭程序后才回到提示符。
   if (out.contains(_consoleBlock)) {
     out = out.replaceFirst(
       _consoleBlock,
@@ -79,7 +87,22 @@ String instrumentRunnerMain(String source) {
       '        L"Run from PowerShell to see engine logs, or check that\\n"\n'
       '        L"data/flutter_assets and data/app.so exist.",\n'
       '        L"flutter_build debug", MB_OK | MB_ICONERROR);\n'
+      '    fflush(stderr);\n'
+      '    ::FreeConsole();\n'
       '    $_failReturn',
+    );
+  }
+
+  // 4) 正常退出点（窗口被关闭、消息循环结束后）：先刷新标准流，再释放我们
+  //    附着/新建的控制台，使 PowerShell/cmd 在关闭程序后干净回到提示符，
+  //    而不是留下挂起或被占用的控制台。
+  if (out.contains(_successReturn)) {
+    out = out.replaceFirst(
+      _successReturn,
+      'fflush(stdout);\n'
+      '    fflush(stderr);\n'
+      '    ::FreeConsole();\n'
+      '    $_successReturn',
     );
   }
 
