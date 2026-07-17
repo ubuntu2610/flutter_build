@@ -71,8 +71,8 @@ class BuildPipeline {
     }
     final patched = instrumentRunnerMain(await mainCpp.readAsString());
     await mainCpp.writeAsString(patched);
-    _log.info('已注入调试信息（--debug-console）：运行时会打开控制台，'
-        '启动失败会弹 MessageBox。');
+    _log.info('已注入调试信息（--debug-console）：引擎日志写入 exe 旁的 '
+        'flutter_build_debug.log，启动失败会弹 MessageBox。');
   }
 
   /// 归一化暂存目录里所有 `.rc` 资源脚本中的路径分隔符：把转义反斜杠
