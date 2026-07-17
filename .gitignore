@@ -35,6 +35,10 @@ llvm-mingw-*/
 .env
 .env.*
 
+# ─── Local deploy config (contains SSH credentials) ───────────
+# 真实部署配置含 SSH 密码，不提交；仅提交 config.example.yaml 模板。
+config.yaml
+
 # ─── OS ───────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
