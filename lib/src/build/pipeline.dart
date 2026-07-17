@@ -248,17 +248,19 @@ class BuildPipeline {
       // 才能找到 winres.h 等系统头。
       '-DCMAKE_RC_FLAGS=-I ${ctx.toolchain.mingwSysrootInclude}',
       '-DCMAKE_MAKE_PROGRAM=${ctx.toolchain.ninjaExecutable}',
-      // 强制指定全局链接标志，起到两个作用：
+      // 强制指定全局链接标志，起到三个作用：
       // 1) 覆盖宿主（Flutter snap）经 env.sh 向 LDFLAGS 注入的
-      //    -lepoxy/-lfontconfig 等 Linux 库（命令行 -D 会压过环境初始化值，
-      //    也会覆盖旧缓存里的被污染值）；
+      //    -lepoxy/-lfontconfig 等 Linux 库；
       // 2) EXE 加 -municode：选用宽字符入口 CRT，匹配 Flutter runner 的
       //    wWinMain；否则 mingw 的 crtexewin 引用窄字符 WinMain 导致
-      //    `undefined symbol: WinMain`。
+      //    `undefined symbol: WinMain`；
+      // 3) 全部加 -static：静态链接 LLVM-MinGW 的 C++ 运行时（libc++、
+      //    libunwind 等），产物自包含。否则运行时会报缺失 libc++.dll /
+      //    libunwind.dll（这两个 DLL 不在普通 Windows 上）。
       // 目标库由 CMake 工程经 target_link_libraries 指定，不依赖这些。
-      '-DCMAKE_EXE_LINKER_FLAGS=-municode',
-      '-DCMAKE_SHARED_LINKER_FLAGS=',
-      '-DCMAKE_MODULE_LINKER_FLAGS=',
+      '-DCMAKE_EXE_LINKER_FLAGS=-municode -static',
+      '-DCMAKE_SHARED_LINKER_FLAGS=-static',
+      '-DCMAKE_MODULE_LINKER_FLAGS=-static',
     ];
     // 用净化过的环境驱动 CMake：剥离宿主（如 Flutter snap）注入的
     // CFLAGS/CXXFLAGS/LDFLAGS 等，否则 -lepoxy/-lfontconfig 等 Linux 库会
