@@ -161,12 +161,16 @@ class SshDeployer {
     _log.info('  大小 ${_fmtBytes(bytes)}');
 
     final sw = Stopwatch()..start();
-    // 1) 建远程父目录（PowerShell New-Item -Force：可建多级、已存在不报错）。
+    // 1) 确保远程父目录存在（不存在则自动创建，含多级）。
+    //    New-Item -Force：可建多级目录、已存在也不报错，天然满足“没有则创建”。
+    //    不用 `| Out-Null` 管道——远程默认 shell 若是 cmd.exe 会把 `|` 当成
+    //    自身的管道而出错；输出交由容错解码打印即可。
+    _log.info('  确保远程目录存在（不存在则创建）: $remoteParent');
     await _ssh([
       'powershell',
       '-NoProfile',
       '-Command',
-      "New-Item -ItemType Directory -Force -Path '$remoteParent' | Out-Null",
+      "New-Item -ItemType Directory -Force -Path '$remoteParent'",
     ]);
     // 2) scp -r 把 localDir 拷进远程父目录（→ remoteParent/<basename>）。
     await _scp(localDir, remoteParent);

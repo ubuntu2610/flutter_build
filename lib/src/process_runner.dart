@@ -69,8 +69,13 @@ class ProcessRunner {
     final stderrBuf = StringBuffer();
     final prefix = tag != null ? '[$tag] ' : '';
 
+    // 用容错 UTF-8 解码：远程 Windows（可能是 GBK 等非 UTF-8 代码页）或 scp 的
+    // 进度输出可能含非法 UTF-8 字节，严格解码会抛 FormatException 直接崩溃整个
+    // 进程。allowMalformed 让非法字节变成占位符而非抛错。
+    const decoder = Utf8Decoder(allowMalformed: true);
+
     final stdoutDone = proc.stdout
-        .transform(utf8.decoder)
+        .transform(decoder)
         .transform(const LineSplitter())
         .listen((line) {
       stdoutBuf.writeln(line);
@@ -78,7 +83,7 @@ class ProcessRunner {
     }).asFuture<void>();
 
     final stderrDone = proc.stderr
-        .transform(utf8.decoder)
+        .transform(decoder)
         .transform(const LineSplitter())
         .listen((line) {
       stderrBuf.writeln(line);
@@ -99,9 +104,8 @@ class ProcessRunner {
         executable: executable,
         arguments: arguments,
         subprocessExitCode: code,
-        stderrText: result.stderr.trim().isEmpty
-            ? result.stdout
-            : result.stderr,
+        stderrText:
+            result.stderr.trim().isEmpty ? result.stdout : result.stderr,
       );
     }
     return result;
