@@ -26,21 +26,25 @@ int APIENTRY wWinMain(...) {
 
 void main() {
   group('instrumentRunnerMain', () {
-    test('补充 <stdio.h> 引入', () {
+    test('补充所需头文件', () {
       final out = instrumentRunnerMain(_sampleMain);
-      expect(out, contains('#include "utils.h"\n#include <stdio.h>'));
+      expect(out, contains('#include <stdio.h>'));
+      expect(out, contains('#include <flutter_windows.h>'));
     });
 
-    test('把日志重定向到 flutter_build_debug.log', () {
+    test('把引擎日志接到控制台（CONOUT\$）而非文件', () {
       final out = instrumentRunnerMain(_sampleMain);
-      expect(out, contains('flutter_build_debug.log'));
-      expect(out, contains('freopen_s'));
-      // 重定向发生在控制台块之后、进入引擎之前。
-      expect(out.indexOf('freopen_s'),
-          greaterThan(out.indexOf('CreateAndAttachConsole')));
+      // 附着父控制台，无则新建。
+      expect(out, contains('AttachConsole(ATTACH_PARENT_PROCESS)'));
+      expect(out, contains('AllocConsole()'));
+      // 重开标准流到控制台，并让引擎重新同步。
+      expect(out, contains(r'freopen_s(&fb_console, "CONOUT$", "w", stdout)'));
+      expect(out, contains('FlutterDesktopResyncOutputStreams()'));
+      // 不再走文件方案。
+      expect(out, isNot(contains('flutter_build_debug.log')));
     });
 
-    test('启动失败处注入 MessageBox 并指向日志文件', () {
+    test('启动失败处注入 MessageBox', () {
       final out = instrumentRunnerMain(_sampleMain);
       expect(out, contains('MessageBoxW'));
       expect(out, contains('failed to start'));
@@ -56,11 +60,10 @@ void main() {
       expect('MessageBoxW'.allMatches(twice).length, 1);
     });
 
-    test('找不到标记时仅加哨兵、不崩', () {
+    test('找不到标记时仅加哨兵、可重复调用稳定', () {
       const noMarkers = 'int main() { return 0; }\n';
       final out = instrumentRunnerMain(noMarkers);
       expect(out, contains('int main() { return 0; }'));
-      // 可重复调用保持稳定。
       expect(instrumentRunnerMain(out), out);
     });
   });

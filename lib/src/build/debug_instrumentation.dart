@@ -1,25 +1,28 @@
-// 给 Windows runner 注入调试信息，用于排查“运行后无窗口、无提示”的静默失败。
+// 给 Windows runner 注入调试信息，让引擎日志默认显示在启动它的控制台
+// （PowerShell / cmd）里，用于排查“运行后无窗口、无提示”的静默失败。
 //
-// Flutter 的 runner 是 GUI 子系统程序（-mwindows），默认没有控制台；标准
-// main.cpp 在窗口/引擎启动失败时直接 `return EXIT_FAILURE` 静默退出。于是在
-// Windows 上双击运行常常“什么都没有”。而临时 AllocConsole 出来的控制台会随
-// 进程退出一闪而过，来不及看。
+// 背景：Flutter 的 runner 是 GUI 子系统程序（-mwindows）。标准 main.cpp 只在
+// “检测到调试器”时才创建控制台，且从 PowerShell 启动时虽然会 AttachConsole 到
+// 父控制台，却**没有把 stdout/stderr 重开到 CONOUT$**，所以引擎的 stderr 日志
+// 根本出不来；窗口/引擎启动失败时还会直接 `return EXIT_FAILURE` 静默退出。
 //
-// 因此本模块对 **暂存副本**（windows_src/runner/main.cpp）做最小改写：
-//   1) 把 stdout/stderr 重定向到 exe 旁的 flutter_build_debug.log —— 引擎的
-//      日志会持久写入文件，进程退出后仍可查看；
-//   2) 启动失败时弹 MessageBox —— 阻塞式、不会一闪而过，并提示去看日志文件。
+// 本模块对 **暂存副本**（windows_src/runner/main.cpp）做最小改写：
+//   1) 附着到启动它的控制台（PowerShell/cmd），没有则新建一个；随后 freopen
+//      stdout/stderr 到 CONOUT$ 并调用 FlutterDesktopResyncOutputStreams()，
+//      使引擎日志实时显示在该控制台；
+//   2) 启动失败时弹 MessageBox —— 双击（无父控制台）时控制台会一闪而过，
+//      弹框可确保失败信息不被错过。
 //
-// 只放纯函数（便于单测）；实际读写文件由 pipeline 编排，且仅在 --debug-console
-// 开启时应用，不影响正常发布构建。
+// 只放纯函数（便于单测）；实际读写文件由 pipeline 编排。默认开启，可用
+// `--no-debug-console` 关闭（发布干净版本时）。
 
 /// 幂等哨兵：已注入则不再重复。
 const String _sentinel = '// flutter_build debug instrumentation';
 
-/// 标准 main.cpp 里 utils.h 的引入行（在其后补 <stdio.h>）。
+/// 标准 main.cpp 里 utils.h 的引入行（在其后补所需头文件）。
 const String _utilsInclude = '#include "utils.h"';
 
-/// 标准 main.cpp 里创建控制台的代码块（在其后插入文件日志重定向）。
+/// 标准 main.cpp 里创建控制台的代码块（整体替换为“始终附着/新建控制台并重开流”）。
 const String _consoleBlock =
     '  if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {\n'
     '    CreateAndAttachConsole();\n'
@@ -33,21 +36,31 @@ String instrumentRunnerMain(String source) {
   if (source.contains(_sentinel)) return source;
   var out = source;
 
-  // 1) 需要 <stdio.h> 的 freopen_s / fprintf（与 utils.cpp 用法一致）。
+  // 1) 需要 <stdio.h> 的 freopen_s/fprintf，以及 <flutter_windows.h> 的
+  //    FlutterDesktopResyncOutputStreams。
   if (out.contains(_utilsInclude)) {
-    out = out.replaceFirst(_utilsInclude, '$_utilsInclude\n#include <stdio.h>');
+    out = out.replaceFirst(
+      _utilsInclude,
+      '$_utilsInclude\n'
+      '#include <stdio.h>          // flutter_build\n'
+      '#include <flutter_windows.h> // flutter_build',
+    );
   }
 
-  // 2) 在 wWinMain 开头（控制台块之后）把 stdout/stderr 重定向到日志文件，
-  //    并打一个到达标记。引擎的 stderr 日志随后会写进该文件。
+  // 2) 始终把引擎日志接到启动它的控制台（PowerShell/cmd），没有父控制台
+  //    （如双击）时新建一个；随后重开标准流并让引擎重新同步。
   if (out.contains(_consoleBlock)) {
     out = out.replaceFirst(
       _consoleBlock,
-      '$_consoleBlock\n'
-      '  {  // flutter_build: redirect logs to a file (survives silent exit)\n'
-      '    FILE* fb_log = nullptr;\n'
-      '    freopen_s(&fb_log, "flutter_build_debug.log", "w", stderr);\n'
-      '    freopen_s(&fb_log, "flutter_build_debug.log", "a", stdout);\n'
+      '  // flutter_build: surface engine logs on the launching console\n'
+      '  if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {\n'
+      '    ::AllocConsole();\n'
+      '  }\n'
+      '  {\n'
+      '    FILE* fb_console = nullptr;\n'
+      '    freopen_s(&fb_console, "CONOUT\$", "w", stdout);\n'
+      '    freopen_s(&fb_console, "CONOUT\$", "w", stderr);\n'
+      '    FlutterDesktopResyncOutputStreams();\n'
       '    fprintf(stderr, "[flutter_build] wWinMain reached; init engine...\\n");\n'
       '    fflush(stderr);\n'
       '  }',
@@ -63,8 +76,8 @@ String instrumentRunnerMain(String source) {
       '    fflush(stderr);\n'
       '    ::MessageBoxW(nullptr,\n'
       '        L"flutter_build: engine/window failed to start.\\n"\n'
-      '        L"See flutter_build_debug.log next to the app for details.\\n"\n'
-      '        L"Most likely data/flutter_assets is empty or data/app.so is missing.",\n'
+      '        L"Run from PowerShell to see engine logs, or check that\\n"\n'
+      '        L"data/flutter_assets and data/app.so exist.",\n'
       '        L"flutter_build debug", MB_OK | MB_ICONERROR);\n'
       '    $_failReturn',
     );

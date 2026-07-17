@@ -58,9 +58,10 @@ class WindowsCommand extends Command<int> {
               '显式指定时覆盖 config 里的 auto_copy（--no-copy 可禁用）。')
       ..addOption('config', help: '指定 config.yaml 路径（默认从当前目录向上查找）。')
       ..addFlag('debug-console',
-          negatable: false,
-          help: '给 runner 注入调试信息：始终打开控制台并在启动失败时弹窗，\n'
-              '用于排查在 Windows 上运行后无窗口/静默退出的问题。');
+          defaultsTo: true,
+          help: '默认开启：给 runner 注入调试信息，让引擎日志显示在启动它的\n'
+              'PowerShell/cmd 控制台，并在启动失败时弹窗。\n'
+              '发布干净版本用 --no-debug-console 关闭。');
   }
 
   @override

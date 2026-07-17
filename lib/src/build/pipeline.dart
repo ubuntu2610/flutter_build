@@ -71,8 +71,8 @@ class BuildPipeline {
     }
     final patched = instrumentRunnerMain(await mainCpp.readAsString());
     await mainCpp.writeAsString(patched);
-    _log.info('已注入调试信息（--debug-console）：引擎日志写入 exe 旁的 '
-        'flutter_build_debug.log，启动失败会弹 MessageBox。');
+    _log.info('已注入调试信息（默认开启，--no-debug-console 可关）：'
+        '从 PowerShell/cmd 运行可看到引擎日志，启动失败会弹 MessageBox。');
   }
 
   /// 归一化暂存目录里所有 `.rc` 资源脚本中的路径分隔符：把转义反斜杠
@@ -310,7 +310,7 @@ class BuildPipeline {
   ///     data/
   ///       icudtl.dat
   ///       app.so            (release/profile)
-  ///       flutter_assets/   (目录已创建；内容由后续资源打包填充)
+  ///       flutter_assets/   (由 flutter assemble copy_flutter_bundle 生成)
   Future<void> _assembleBundle(BuildContext ctx) async {
     final outDir = p.dirname(ctx.finalExe);
     final dataDir = p.join(outDir, 'data');
@@ -343,18 +343,41 @@ class BuildPipeline {
       await File(ctx.appAotElf).copy(p.join(dataDir, 'app.so'));
     }
 
-    // 完整性诊断：flutter_assets 为空时醒目告警。这是本工具当前的已知缺口，
-    // 也是应用在 Windows 上“启动后无窗口/静默退出”最常见的原因——引擎找不到
-    // 资源清单会初始化失败，而 GUI 程序默认不显示任何错误。
+    // flutter_assets（AssetManifest / 字体 / NOTICES / shaders 等）。
+    await _bundleFlutterAssets(ctx);
+
+    // 安全网：生成后仍为空说明资源打包异常，明确告警。
     final assetsEmpty = Directory(ctx.flutterAssetsDir).listSync().isEmpty;
     if (assetsEmpty) {
-      _log.warn('data/flutter_assets 为空：尚未打包 Dart 资源'
-          '（AssetManifest / 字体等）。');
-      _log.warn('应用在 Windows 上很可能启动后无窗口/静默退出，'
-          '直到补齐 flutter_assets。');
-      _log.warn('排查启动过程可加 --debug-console 重新构建'
-          '（会打开控制台并在失败时弹窗）。');
+      _log.warn('data/flutter_assets 仍为空：资源打包可能失败，'
+          '应用在 Windows 上很可能无窗口/静默退出。');
+      _log.warn('从 PowerShell 运行 exe 可看到引擎日志'
+          '（调试信息默认已注入）。');
     }
+  }
+
+  /// 生成 flutter_assets（AssetManifest / 字体 / NOTICES / shaders 等）。
+  ///
+  /// 复用 flutter 自己的资源打包逻辑：`flutter assemble copy_flutter_bundle`。
+  /// 该 target 只依赖 KernelSnapshot（不触发 gen_snapshot / 无需 Windows 二进制），
+  /// 因此能在 Linux 上产出 flutter_assets，直接输出到 data/flutter_assets/。
+  /// release/profile 不含 kernel_blob（用 app.so）；debug 会带 kernel_blob 及快照。
+  Future<void> _bundleFlutterAssets(BuildContext ctx) async {
+    _log.info('  生成 flutter_assets（flutter assemble copy_flutter_bundle）…');
+    await _runner.run(
+      p.join(ctx.env.sdkRoot, 'bin', 'flutter'),
+      <String>[
+        'assemble',
+        '-dTargetPlatform=windows-x64',
+        '-dBuildMode=${ctx.mode.cliName}',
+        '-dTreeShakeIcons=${ctx.treeShakeIcons}',
+        '--output=${ctx.flutterAssetsDir}',
+        'copy_flutter_bundle',
+      ],
+      workingDirectory: ctx.project.root,
+      stream: true,
+      tag: 'assemble',
+    );
   }
 
   /// 定位 CMake 构出的 runner 可执行文件。优先常见位置（runner/ 子目录），
