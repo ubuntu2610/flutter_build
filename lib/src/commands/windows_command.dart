@@ -56,7 +56,8 @@ class WindowsCommand extends Command<int> {
       ..addFlag('copy',
           help: '构建成功后把产物拷到 config.yaml 指定的远程 Windows 机器。\n'
               '显式指定时覆盖 config 里的 auto_copy（--no-copy 可禁用）。')
-      ..addOption('config', help: '指定 config.yaml 路径（默认从当前目录向上查找）。')
+      ..addOption('config', help: '指定 config.yaml 路径（默认依次查找：项目目录向上、'
+          'flutter_build 工具目录向上、~/.flutter_build/config.yaml）。')
       ..addFlag('debug-console',
           defaultsTo: true,
           help: '默认开启：给 runner 注入调试信息，让引擎日志显示在启动它的\n'

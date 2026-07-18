@@ -5,7 +5,6 @@
 #
 # 作用：每次 `flutter_build windows` 构建成功后，可自动把产物 bundle 通过 scp
 # 拷到远程 Windows 机器，便于在 Windows 上直接运行测试。
-#
 # 说明：这里用 scp（SSH→Windows 目录拷贝的标准方式，可处理大文件）。密码登录
 # 需要本机安装 sshpass（sudo apt install sshpass）；也可留空 password 改用 SSH 密钥。
 
@@ -26,9 +25,7 @@ port: 22
 auto_copy: true
 
 # 远程镜像根目录（Windows 路径，正/反斜杠均可）。
-# 产物会拷到 remote_dir + （本地产物相对 config.yaml 所在目录的路径），
-# 从而在远程镜像出与本地一致的目录结构。例如本地仓库根为
-# /home/you/project/flutter_build、remote_dir 为 C:/project/flutter_build，
-# 则 example 的产物 build/win_cross/release/hello 会落在：
-#   C:/project/flutter_build/example/build/win_cross/release/hello
-remote_dir: C:/project/flutter_build
+# 产物会拷到 remote_dir/<app_name>（扁平结构，不镜像本地完整路径）。
+# 例如 remote_dir 为 C:/flutter_build、app 名为 flutter_build_example：
+#   C:/flutter_build/flutter_build_example
+remote_dir: C:/flutter_build

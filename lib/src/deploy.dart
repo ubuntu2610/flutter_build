@@ -2,17 +2,16 @@
 // Windows 机器，便于在 Windows 上直接测试运行。
 //
 // 关于 "git lfs"：它是 git 的大文件版本管理扩展（把大文件以指针形式存进
-// git 仓库），无法把文件“通过 SSH 拷到远程 Windows 的 C 盘目录”。SSH→Windows
+// git 仓库），无法把文件"通过 SSH 拷到远程 Windows 的 C 盘目录"。SSH→Windows
 // 目录拷贝的标准工具是 scp（可正常处理大文件，如 45MB 的 flutter_windows.dll）。
 // 因此本模块用 scp 实现目标；密码登录借助 sshpass 做非交互认证。
 //
 // 配置来自 config.yaml（git 不上传，附带 config.example.yaml 模板）：
 //   host / ip、username、password、auto_copy、remote_dir[、port]
 //
-// 远程目标 = remote_dir + （本地产物相对 config.yaml 所在目录的路径），
-// 从而在远程镜像出与本地一致的目录结构。例如：
-//   本地 <repo>/example/build/win_cross/release/hello
-//   远程 C:/project/flutter_build/example/build/win_cross/release/hello
+// 远程目标 = remote_dir / <app_name>（扁平结构，不镜像本地完整路径）。
+// 例如 remote_dir 为 C:/flutter_build、app 名为 flutter_build_example：
+//   远程 C:/flutter_build/flutter_build_example
 
 import 'dart:io';
 
@@ -60,18 +59,49 @@ class DeployConfig {
 
   /// 从 [startDir] 逐级向上查找 [fileName]；找到则解析，否则返回 null。
   ///
-  /// 这样把 config.yaml 放在仓库根、却在子目录（如 example/）里构建时也能找到，
-  /// 且相对路径天然以仓库根为基准，远程镜像结构与本地一致。
+  /// 搜索顺序：
+  /// 1. [startDir] 及其父目录（项目本地 config）
+  /// 2. `Platform.script` 所在目录及其父目录（flutter_build 工具自身的 config
+  ///    —— 全局激活 `--source path` 时 script 指向源码 bin/，向上可找到
+  ///    仓库根的 config.yaml，对全局生效）
+  /// 3. `~/.flutter_build/config.yaml`（全局兜底）
   static DeployConfig? find(String startDir) {
-    var dir = Directory(p.normalize(p.absolute(startDir)));
-    while (true) {
-      final f = File(p.join(dir.path, fileName));
+    // 1) 项目本地
+    final local = _findFrom(startDir);
+    if (local != null) return local;
+
+    // 2) flutter_build 工具自身目录
+    try {
+      final scriptDir = p.dirname(Platform.script.toFilePath());
+      final tool = _findFrom(scriptDir);
+      if (tool != null) return tool;
+    } catch (_) {
+      // Platform.script 可能非 file: URI（如 snapshot），忽略
+    }
+
+    // 3) 全局兜底
+    final home = Platform.environment['HOME'];
+    if (home != null) {
+      final f = File(p.join(home, '.flutter_build', fileName));
       if (f.existsSync()) {
-        return parse(f.readAsStringSync(), baseDir: dir.path);
+        return parse(f.readAsStringSync(), baseDir: p.dirname(f.path));
       }
-      final parent = dir.parent;
-      if (parent.path == dir.path) return null; // 已到文件系统根
-      dir = parent;
+    }
+
+    return null;
+  }
+
+  /// 从 [dir] 逐级向上查找 [fileName]；找到则解析，否则返回 null。
+  static DeployConfig? _findFrom(String dir) {
+    var d = Directory(p.normalize(p.absolute(dir)));
+    while (true) {
+      final f = File(p.join(d.path, fileName));
+      if (f.existsSync()) {
+        return parse(f.readAsStringSync(), baseDir: d.path);
+      }
+      final parent = d.parent;
+      if (parent.path == d.path) return null; // 已到文件系统根
+      d = parent;
     }
   }
 
@@ -101,16 +131,17 @@ class DeployConfig {
     );
   }
 
-  /// 计算 [localPath]（本地绝对/相对路径）在远程的目标路径：
-  /// remoteDir + (localPath 相对 baseDir 的部分)，统一正斜杠。
+  /// 计算 [localPath]（本地构建产物目录）在远程的目标路径：
+  /// `remoteDir/<basename>`（扁平结构）。
+  ///
+  /// 例如 localPath 为 `.../build/win_cross/release/flutter_build_example`，
+  /// remoteDir 为 `C:/flutter_build` → `C:/flutter_build/flutter_build_example`。
   String remotePathFor(String localPath) {
-    final abs = p.normalize(p.absolute(localPath));
-    final rel = p.relative(abs, from: baseDir);
-    final relPosix = p.split(rel).where((s) => s != '.').join('/');
     final base = remoteDir.endsWith('/')
         ? remoteDir.substring(0, remoteDir.length - 1)
         : remoteDir;
-    return relPosix.isEmpty ? base : '$base/$relPosix';
+    final name = p.basename(p.normalize(p.absolute(localPath)));
+    return name.isEmpty ? base : '$base/$name';
   }
 
   static String _toPosix(String s) => s.replaceAll('\\', '/');
@@ -162,7 +193,7 @@ class SshDeployer {
 
     final sw = Stopwatch()..start();
     // 1) 确保远程父目录存在（不存在则自动创建，含多级）。
-    //    New-Item -Force：可建多级目录、已存在也不报错，天然满足“没有则创建”。
+    //    New-Item -Force：可建多级目录、已存在也不报错，天然满足"没有则创建"。
     //    不用 `| Out-Null` 管道——远程默认 shell 若是 cmd.exe 会把 `|` 当成
     //    自身的管道而出错；输出交由容错解码打印即可。
     _log.info('  确保远程目录存在（不存在则创建）: $remoteParent');

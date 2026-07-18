@@ -155,6 +155,35 @@ flutter_build windows --release # 生成 .exe
 
 ---
 
+## 自动部署到 Windows 机器
+
+构建成功后，`flutter_build` 可自动通过 SCP 把产物 bundle 拷到远程 Windows
+机器便于测试。在 `pubspec.yaml` 旁边（或上层目录树任意位置）创建
+`config.yaml`，以 [`config.example.yaml`](config.example.yaml) 为模板：
+
+```yaml
+host: 192.168.1.100         # Windows 机器 IP / 主机名
+username: ubuntu             # SSH 登录名
+password: secret             # 或留空改用 SSH 密钥
+auto_copy: true              # 每次构建成功后自动拷贝
+remote_dir: C:/flutter_build # Windows 上的目标根目录
+```
+
+产物拷到 `remote_dir/<app_name>`（扁平结构，不镜像本地完整路径）。例如
+`remote_dir` 为 `C:/flutter_build`、app 名为 `flutter_build_example`：
+
+```
+C:/flutter_build/flutter_build_example/
+  ├── flutter_build_example.exe
+  ├── flutter_windows.dll
+  └── data/
+```
+
+`--copy` / `--no-copy` 可在单次运行时覆盖 `auto_copy`。密码登录需安装
+`sshpass`（`sudo apt install sshpass`）。
+
+---
+
 ## 架构
 
 ```

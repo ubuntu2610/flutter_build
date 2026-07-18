@@ -164,6 +164,37 @@ toolchain / engine cache — delete `~/.flutter_build/` yourself to wipe those.
 
 ---
 
+## Auto-deploy to a Windows machine
+
+After a successful build, `flutter_build` can automatically SCP the output
+bundle to a remote Windows machine for testing. Create `config.yaml` (next to
+`pubspec.yaml` or anywhere up the directory tree) using
+[`config.example.yaml`](config.example.yaml) as a template:
+
+```yaml
+host: 192.168.1.100        # Windows machine IP / hostname
+username: ubuntu            # SSH login
+password: secret            # or leave empty to use SSH keys
+auto_copy: true             # auto-deploy after every build
+remote_dir: C:/flutter_build # base dir on the Windows machine
+```
+
+The output is copied to `remote_dir/<app_name>` (flat structure). For example,
+building the `flutter_build_example` app with `remote_dir: C:/flutter_build`
+lands at:
+
+```
+C:/flutter_build/flutter_build_example/
+  ├── flutter_build_example.exe
+  ├── flutter_windows.dll
+  └── data/
+```
+
+Flags `--copy` / `--no-copy` override `auto_copy` per-run. Password auth
+requires `sshpass` (`sudo apt install sshpass`).
+
+---
+
 ## Architecture
 
 ```

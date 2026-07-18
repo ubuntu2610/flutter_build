@@ -55,27 +55,29 @@ remote_dir: C:/project/flutter_build
 
   group('DeployConfig.remotePathFor', () {
     DeployConfig cfg() => DeployConfig.parse(
-          'host: h\nremote_dir: C:/project/flutter_build\n',
+          'host: h\nremote_dir: C:/flutter_build\n',
           baseDir: '/repo',
         );
 
-    test('镜像本地相对路径到远程（正斜杠）', () {
+    test('扁平结构：remote_dir/basename', () {
       final c = cfg();
       expect(
         c.remotePathFor('/repo/example/build/win_cross/release/hello'),
-        'C:/project/flutter_build/example/build/win_cross/release/hello',
+        'C:/flutter_build/hello',
       );
     });
 
-    test('产物就在 baseDir 时返回 remote_dir 本身', () {
-      expect(cfg().remotePathFor('/repo'), 'C:/project/flutter_build');
+    test('app 名作为远程目录名', () {
+      expect(
+        cfg().remotePathFor('/any/path/flutter_build_example'),
+        'C:/flutter_build/flutter_build_example',
+      );
     });
 
     test('remote_dir 末尾多余斜杠不影响结果', () {
       final c = DeployConfig.parse(
-          'host: h\nremote_dir: C:/project/flutter_build/\n',
-          baseDir: '/repo');
-      expect(c.remotePathFor('/repo/a/b'), 'C:/project/flutter_build/a/b');
+          'host: h\nremote_dir: C:/flutter_build/\n', baseDir: '/repo');
+      expect(c.remotePathFor('/repo/a/b'), 'C:/flutter_build/b');
     });
   });
 }
