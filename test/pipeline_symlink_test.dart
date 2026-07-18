@@ -197,139 +197,15 @@ void main() {
     );
   });
 
-  // ── PluginSourcePatcher 纯函数补丁 ──────────────────────────────
+  // ── PluginSourcePatcher（当前无补丁，验证 no-op）────────────────
 
-  group('patchWindowManagerCpp', () {
-    test('移除类体内多余 WindowManager:: 限定但保留类外定义', () {
-      const input = 'class WindowManager {\n'
-          '  void WindowManager::ForceRefresh();\n'
-          '  bool WindowManager::IsFocused();\n'
-          '};\n'
-          'void WindowManager::ForceRefresh() {}\n';
-      final out = patchWindowManagerCpp(input);
-      expect(out, contains('  void ForceRefresh();'));
-      expect(out, contains('  bool IsFocused();'));
-      // 类外定义保留限定
-      expect(out, contains('void WindowManager::ForceRefresh() {}'));
-    });
-
-    test('不改动 #pragma once / Windows.h（由垫片和标志处理）', () {
-      const input = '#pragma once\n#include <Windows.h>\n';
-      expect(patchWindowManagerCpp(input), input);
-    });
-
-    test('幂等：重复调用不产生变化', () {
-      const input = '#pragma once\n#include <Windows.h>\n'
-          '  void WindowManager::Foo();\n';
-      final once = patchWindowManagerCpp(input);
-      final twice = patchWindowManagerCpp(once);
-      expect(twice, once);
-    });
-  });
-
-  group('patchWindowManagerPluginCpp', () {
-    test('移除类体内多余 WindowManagerPlugin:: 限定但保留类外定义', () {
-      const input = 'class WindowManagerPlugin : public flutter::Plugin {\n'
-          '  void WindowManagerPlugin::_EmitEvent(std::string eventName);\n'
-          '  std::optional<LRESULT> WindowManagerPlugin::HandleWindowProc(\n'
-          '};\n'
-          'void WindowManagerPlugin::_EmitEvent(std::string eventName) {}\n';
-      final out = patchWindowManagerPluginCpp(input);
-      expect(out, contains('  void _EmitEvent(std::string eventName);'));
-      expect(out, contains('  std::optional<LRESULT> HandleWindowProc('));
-      // 类外定义保留限定
-      expect(out,
-          contains('void WindowManagerPlugin::_EmitEvent(std::string eventName) {}'));
-    });
-
-    test('幂等', () {
-      const input = '  void WindowManagerPlugin::Foo();\n';
-      expect(patchWindowManagerPluginCpp(patchWindowManagerPluginCpp(input)),
-          patchWindowManagerPluginCpp(input));
-    });
-  });
-
-  group('patchHotkeyManagerPluginCpp', () {
-    test('EncodableMap 初始化显式包装 EncodableValue', () {
-      const input = 'args["data"] =\n'
-          '    flutter::EncodableMap({{"identifier", identifier}});\n';
-      final out = patchHotkeyManagerPluginCpp(input);
-      expect(out,
-          contains('flutter::EncodableValue("identifier")'));
-      expect(out, contains('flutter::EncodableValue(identifier)'));
-      expect(out,
-          isNot(contains('EncodableMap({{"identifier", identifier}})')));
-    });
-
-    test('幂等', () {
-      const input = 'flutter::EncodableMap({{"identifier", identifier}})';
-      expect(patchHotkeyManagerPluginCpp(patchHotkeyManagerPluginCpp(input)),
-          patchHotkeyManagerPluginCpp(input));
-    });
-  });
-
-  group('patchScreenRetrieverPluginH', () {
-    test('移除成员声明上的多余类名限定', () {
-      const input = '  void ScreenRetrieverWindowsPlugin::GetCursorScreenPoint(\n'
-          '  void ScreenRetrieverWindowsPlugin::GetPrimaryDisplay(\n'
-          '  void ScreenRetrieverWindowsPlugin::GetAllDisplays(\n';
-      final out = patchScreenRetrieverPluginH(input);
-      expect(out, isNot(contains('ScreenRetrieverWindowsPlugin::')));
-      expect(out, contains('void GetCursorScreenPoint('));
-      expect(out, contains('void GetPrimaryDisplay('));
-      expect(out, contains('void GetAllDisplays('));
-    });
-
-    test('幂等', () {
-      const input = 'void ScreenRetrieverWindowsPlugin::GetAllDisplays(';
-      expect(patchScreenRetrieverPluginH(patchScreenRetrieverPluginH(input)),
-          patchScreenRetrieverPluginH(input));
-    });
-  });
-
-  // ── PluginSourcePatcher 集成 ────────────────────────────────────
-
-  test('PluginSourcePatcher 物化符号链接并应用补丁，不修改原件', () async {
-    // 创建模拟的 window_manager 插件源码
-    final pluginRoot =
-        Directory(p.join(tempDir.path, 'window_manager'))..createSync();
-    final pluginWindows = Directory(p.join(pluginRoot.path, 'windows'))
-      ..createSync();
-    File(p.join(pluginWindows.path, 'window_manager.cpp'))
-        .writeAsStringSync('#pragma once\n#include <Windows.h>\n'
-            'class WindowManager {\n'
-            '  void WindowManager::Foo();\n'
-            '};\n');
-
-    // 在 ephemeral/.plugin_symlinks 下创建符号链接
+  test('PluginSourcePatcher 当前无注册补丁，apply 为 no-op', () async {
     final ephemeralDir = p.join(tempDir.path, 'ephemeral');
     final symlinkDir =
         Directory(p.join(ephemeralDir, '.plugin_symlinks'))
           ..createSync(recursive: true);
-    Link(p.join(symlinkDir.path, 'window_manager'))
-        .createSync(pluginRoot.path);
-
+    // apply 应静默返回，不报错也不修改任何文件
     await const PluginSourcePatcher().apply(ephemeralDir);
-
-    // 符号链接应被替换为真实目录
-    final pluginPath = p.join(symlinkDir.path, 'window_manager');
-    expect(
-      FileSystemEntity.typeSync(pluginPath, followLinks: false),
-      FileSystemEntityType.directory,
-    );
-
-    // 补丁已应用到副本：仅移除多余限定，#pragma once / Windows.h 保留
-    final cpp = File(p.join(pluginPath, 'windows', 'window_manager.cpp'))
-        .readAsStringSync();
-    expect(cpp, contains('#pragma once'));
-    expect(cpp, contains('#include <Windows.h>'));
-    expect(cpp, contains('  void Foo();'));
-    expect(cpp, isNot(contains('WindowManager::Foo')));
-
-    // pub-cache 原件未被修改
-    final original =
-        File(p.join(pluginRoot.path, 'windows', 'window_manager.cpp'))
-            .readAsStringSync();
-    expect(original, contains('void WindowManager::Foo();'));
+    expect(symlinkDir.existsSync(), isTrue);
   });
 }

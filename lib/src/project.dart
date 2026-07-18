@@ -166,6 +166,11 @@ class FlutterProject {
       ..writeln('foreach(plugin \${FLUTTER_PLUGIN_LIST})')
       ..writeln(
           '  add_subdirectory(flutter/ephemeral/.plugin_symlinks/\${plugin}/windows plugins/\${plugin})')
+      // MinGW 给 shared library 加 lib 前缀（libfoo.dll），但 Windows 运行时
+      // 期望 MSVC 命名（foo.dll）。设 PREFIX "" 去掉前缀，与 flutter build
+      // 在 Windows + MSVC 下的产物一致。
+      ..writeln(
+          '  set_target_properties(\${plugin}_plugin PROPERTIES PREFIX "")')
       ..writeln(
           '  target_link_libraries(\${BINARY_NAME} PRIVATE \${plugin}_plugin)')
       ..writeln(

@@ -355,11 +355,19 @@ class BuildPipeline {
       //     unknown-pragmas       — MSVC 专属 #pragma comment / #pragma warning
       //     unused-const-variable — constexpr 常量定义未引用（如 kWindowClassName）
       //     unused-local-typedef  — 函数内 typedef 名未引用（如 ACCENT_STATE）
+      //     extra-qualification   — 类体内成员声明的多余类名限定（MSVC 允许）
+      //   -fms-extensions — 让 Clang 识别 MSVC 扩展语法（#pragma comment 等），
+      //     并将 extra-qualification 从硬错误降级为 ExtWarn
+      //   -fms-compatibility — MSVC 兼容模式，放宽隐式转换等规则，使 MSVC 能
+      //     编译的插件源码（如 EncodableMap({{"k", v}}) 初始化）在 Clang 下
+      //     也能通过，无需修改插件源码
       '-DCMAKE_CXX_FLAGS=-I $compatDir '
           '-Wno-pragma-once-outside-header -Wno-deprecated-declarations '
+          '-fms-extensions -fms-compatibility '
           '-Wno-error=unknown-pragmas '
           '-Wno-error=unused-const-variable '
-          '-Wno-error=unused-local-typedef',
+          '-Wno-error=unused-local-typedef '
+          '-Wno-error=extra-qualification',
     ];
     // 用净化过的环境驱动 CMake：剥离宿主（如 Flutter snap）注入的
     // CFLAGS/CXXFLAGS/LDFLAGS 等，否则 -lepoxy/-lfontconfig 等 Linux 库会
@@ -459,6 +467,21 @@ class BuildPipeline {
     final engineDll = ctx.artifacts.flutterWindowsDllForMode(ctx.mode);
     if (File(engineDll).existsSync()) {
       await File(engineDll).copy(p.join(outDir, 'flutter_windows.dll'));
+    }
+
+    // 插件 DLL：从 cmake_build/plugins/ 拷到产物目录（exe 同级）。
+    // generated_plugins.cmake 已设 PREFIX "" 去掉 MinGW 的 lib 前缀，
+    // 此处额外做 lib 前缀剥离作为兜底。
+    final pluginsDir = Directory(p.join(ctx.cmakeBuildDir, 'plugins'));
+    if (pluginsDir.existsSync()) {
+      for (final entity
+          in pluginsDir.listSync(recursive: true, followLinks: false)) {
+        if (entity is! File) continue;
+        final name = p.basename(entity.path);
+        if (!name.endsWith('.dll')) continue;
+        final cleanName = name.startsWith('lib') ? name.substring(3) : name;
+        await entity.copy(p.join(outDir, cleanName));
+      }
     }
     await Directory(dataDir).create(recursive: true);
     if (File(ctx.artifacts.icudtl).existsSync()) {
