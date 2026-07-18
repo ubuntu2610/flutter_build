@@ -1,12 +1,12 @@
 // 插件源码补丁基础设施。
 //
 // 设计原则（见 .codebuddy/rules.md）：能用编译标志 / 垫片头文件解决的，
-// 不改插件源码。当前所有兼容性问题已由 pipeline 的 `CMAKE_CXX_FLAGS`
-// （`-fms-extensions -fms-compatibility -Wno-error=...`）和垫片头文件
-// 统一处理，无需源码补丁。
+// 不改插件源码。绝大多数兼容性问题已由 pipeline 的 `CMAKE_CXX_FLAGS`
+// （`-fms-extensions -Wno-error=microsoft-extra-qualification` 等）和垫片
+// 头文件统一处理。
 //
-// 本模块保留物化符号链接 + 应用补丁的基础设施，以便未来遇到无法用标志 /
-// 垫片解决的硬错误时可在此注册补丁，而不需修改 pipeline 编排逻辑。
+// 仅保留 1 个无法用标志解决的 C++ 类型硬错误补丁：EncodableMap 初始化
+// （Clang/libc++ 的 initializer_list<pair> 转换规则比 MSVC STL 更严格）。
 
 import 'dart:io';
 
@@ -14,11 +14,29 @@ import 'package:path/path.dart' as p;
 
 import '../logger.dart';
 
-/// 已知需要源码补丁的插件及其文件级补丁规则。
+/// 修补 `hotkey_manager_windows/windows/hotkey_manager_windows_plugin.cpp`：
 ///
-/// 当前为空——所有兼容性问题均通过编译标志和垫片头文件解决。
-/// 注册格式：`{插件名: {相对 windows/ 的文件路径: 补丁函数}}`。
-const Map<String, Map<String, String Function(String)>> _pluginPatches = {};
+/// `EncodableMap({{"identifier", identifier}})` 在 Clang/libc++ 下无法将
+/// `{"identifier", identifier}` 推导为 `pair<EncodableValue, EncodableValue>`
+/// （Clang 的 initializer_list 元素 copy-list-initialization 不允许两个
+/// 用户定义转换：`const char*`→`EncodableValue` 和
+/// `std::string`→`EncodableValue`）。MSVC STL 允许，故此行在 Windows +
+/// MSVC 下正常编译。显式包装为 `EncodableValue` 即可，且修改后仍与 MSVC
+/// 兼容。
+String patchHotkeyManagerPluginCpp(String content) {
+  return content.replaceAll(
+    'flutter::EncodableMap({{"identifier", identifier}})',
+    'flutter::EncodableMap({{flutter::EncodableValue("identifier"), '
+        'flutter::EncodableValue(identifier)}})',
+  );
+}
+
+/// 已知需要源码补丁的插件及其文件级补丁规则。
+const Map<String, Map<String, String Function(String)>> _pluginPatches = {
+  'hotkey_manager_windows': {
+    'hotkey_manager_windows_plugin.cpp': patchHotkeyManagerPluginCpp,
+  },
+};
 
 /// 对暂存目录下 `.plugin_symlinks/` 中已知有兼容问题的插件应用源码补丁。
 class PluginSourcePatcher {

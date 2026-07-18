@@ -335,12 +335,14 @@ class BuildPipeline {
       //    libunwind 等），产物自包含。否则运行时会报缺失 libc++.dll /
       //    libunwind.dll（这两个 DLL 不在普通 Windows 上）。
       // 4) -ldwmapi：部分插件（如 window_manager）通过 MSVC 专属的
-      //    `#pragma comment(lib, "dwmapi.lib")` 指定链接库，Clang 忽略该
-      //    pragma。dwmapi 是标准 Windows 系统库，全局加上不影响不需要它的
-      //    目标（链接器只按需取符号）。shcore 由插件运行时 LoadLibrary
-      //    动态加载，不需要链接。
-      '-DCMAKE_EXE_LINKER_FLAGS=-municode -static -ldwmapi',
-      '-DCMAKE_SHARED_LINKER_FLAGS=-static -ldwmapi',
+      //    `#pragma comment(lib, "dwmapi.lib")` 指定链接库。-fms-extensions
+      //    会让 Clang 识别该 pragma 并自动传 -ldwmapi，此处 -ldwmapi 作为
+      //    兜底。shcore 由插件运行时 LoadLibrary 动态加载，不需要链接。
+      //    -L <compatDir>：compatDir 下有 libGdi32.a → libgdi32.a 的大小写
+      //    修正符号链接（#pragma comment(lib, "Gdi32.lib") 传 -lGdi32，但
+      //    MinGW 的库文件全小写 libgdi32.a，Linux 大小写敏感）。
+      '-DCMAKE_EXE_LINKER_FLAGS=-municode -static -ldwmapi -L $compatDir',
+      '-DCMAKE_SHARED_LINKER_FLAGS=-static -ldwmapi -L $compatDir',
       '-DCMAKE_MODULE_LINKER_FLAGS=-static',
       // 全局 C++ 编译标志（不修改插件源码，仅在 flutter_build 侧解决兼容性）：
       //   -I <compatDir>  — MinGW 缺失的 Windows SDK 头文件垫片（如
@@ -357,17 +359,16 @@ class BuildPipeline {
       //     unused-local-typedef  — 函数内 typedef 名未引用（如 ACCENT_STATE）
       //     extra-qualification   — 类体内成员声明的多余类名限定（MSVC 允许）
       //   -fms-extensions — 让 Clang 识别 MSVC 扩展语法（#pragma comment 等），
-      //     并将 extra-qualification 从硬错误降级为 ExtWarn
-      //   -fms-compatibility — MSVC 兼容模式，放宽隐式转换等规则，使 MSVC 能
-      //     编译的插件源码（如 EncodableMap({{"k", v}}) 初始化）在 Clang 下
-      //     也能通过，无需修改插件源码
+      //     并将 extra-qualification 从硬错误降级为 ExtWarn（-fms-compatibility
+      //     会破坏 MinGW-w64 标准库头文件，不可用）。-fms-extensions 下该警告
+      //     的诊断组名为 microsoft-extra-qualification（非 extra-qualification）。
       '-DCMAKE_CXX_FLAGS=-I $compatDir '
           '-Wno-pragma-once-outside-header -Wno-deprecated-declarations '
-          '-fms-extensions -fms-compatibility '
+          '-fms-extensions '
           '-Wno-error=unknown-pragmas '
           '-Wno-error=unused-const-variable '
           '-Wno-error=unused-local-typedef '
-          '-Wno-error=extra-qualification',
+          '-Wno-error=microsoft-extra-qualification',
     ];
     // 用净化过的环境驱动 CMake：剥离宿主（如 Flutter snap）注入的
     // CFLAGS/CXXFLAGS/LDFLAGS 等，否则 -lepoxy/-lfontconfig 等 Linux 库会
@@ -425,6 +426,11 @@ class BuildPipeline {
   ///
   /// 仅在文件不存在或内容变化时写入，避免增量构建中因时间戳变化触发
   /// ninja 全量重编。
+  ///
+  /// 同时创建库文件大小写修正符号链接：`-fms-extensions` 让 Clang 处理
+  /// `#pragma comment(lib, "Gdi32.lib")`，传 `-lGdi32` 给链接器，但 MinGW
+  /// 的库文件全小写 `libgdi32.a`，Linux 大小写敏感找不到。创建
+  /// `libGdi32.a → libgdi32.a` 符号链接桥接。
   Future<String> _materializeCompatHeaders(BuildContext ctx) async {
     final dir = Directory(p.join(ctx.intermediatesDir, 'mingw_compat'));
     await dir.create(recursive: true);
@@ -432,6 +438,18 @@ class BuildPipeline {
       final file = File(p.join(dir.path, entry.key));
       if (!file.existsSync() || file.readAsStringSync() != entry.value) {
         await file.writeAsString(entry.value);
+      }
+    }
+
+    // 库大小写修正：#pragma comment(lib, "Gdi32.lib") → -lGdi32 → libGdi32.a
+    // MinGW 实际文件为 libgdi32.a（全小写），Linux 大小写敏感。
+    final mingwLib =
+        p.join(ctx.toolchain.llvmMingwRoot, ctx.toolchain.targetTriple, 'lib');
+    final gdi32Target = p.join(mingwLib, 'libgdi32.a');
+    if (File(gdi32Target).existsSync()) {
+      final link = Link(p.join(dir.path, 'libGdi32.a'));
+      if (!link.existsSync()) {
+        await link.create(gdi32Target);
       }
     }
     return dir.path;

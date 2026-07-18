@@ -197,15 +197,23 @@ void main() {
     );
   });
 
-  // ── PluginSourcePatcher（当前无补丁，验证 no-op）────────────────
+  // ── PluginSourcePatcher（仅 EncodableMap 补丁）──────────────────
 
-  test('PluginSourcePatcher 当前无注册补丁，apply 为 no-op', () async {
-    final ephemeralDir = p.join(tempDir.path, 'ephemeral');
-    final symlinkDir =
-        Directory(p.join(ephemeralDir, '.plugin_symlinks'))
-          ..createSync(recursive: true);
-    // apply 应静默返回，不报错也不修改任何文件
-    await const PluginSourcePatcher().apply(ephemeralDir);
-    expect(symlinkDir.existsSync(), isTrue);
+  group('patchHotkeyManagerPluginCpp', () {
+    test('EncodableMap 初始化显式包装 EncodableValue', () {
+      const input = 'args["data"] =\n'
+          '    flutter::EncodableMap({{"identifier", identifier}});\n';
+      final out = patchHotkeyManagerPluginCpp(input);
+      expect(out, contains('flutter::EncodableValue("identifier")'));
+      expect(out, contains('flutter::EncodableValue(identifier)'));
+      expect(out,
+          isNot(contains('EncodableMap({{"identifier", identifier}})')));
+    });
+
+    test('幂等', () {
+      const input = 'flutter::EncodableMap({{"identifier", identifier}})';
+      expect(patchHotkeyManagerPluginCpp(patchHotkeyManagerPluginCpp(input)),
+          patchHotkeyManagerPluginCpp(input));
+    });
   });
 }
