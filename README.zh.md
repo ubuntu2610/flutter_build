@@ -142,9 +142,16 @@ flutter_build windows --release # 生成 .exe
 
 顶层参数：`-v` / `--verbose`、`--no-color`、`--cache-dir <dir>`、`--version`。
 
-### `flutter_build clean [-o path]`
+### `flutter_build clean [-o path] [--cmake]`
 
 删除当前项目的 `build/win_cross/`。**不会**触碰工具链 / 引擎缓存——如需清除，请自行删除 `~/.flutter_build/`。
+
+| 参数       | 用途                                                                |
+|------------|---------------------------------------------------------------------|
+| `-o path`  | 要清理的构建根目录（默认：`<project>/build/win_cross`）。           |
+| `--cmake`  | 仅删除各模式的 `cmake_build/`（CMake 配置与 Ninja 缓存），保留       |
+|            | `intermediates/`（kernel dill、AOT elf）和最终产物。更换编译标志或    |
+|            | 垫片头文件后可用此选项强制 CMake 重新配置，无需重跑耗时的 AOT 编译。  |
 
 ---
 
@@ -180,6 +187,8 @@ flutter_build windows --release # 生成 .exe
    -static-libwinpthread` 意味着可执行文件不依赖 MinGW 运行时 DLL。
 
 5. **ELF 格式 AOT 快照。** `gen_snapshot --snapshot_kind=app-aot-elf` 无论目标操作系统为何都会写出 ELF 文件。Flutter Windows 引擎内置了 ELF 加载器，会在运行时消费它。
+
+6. **尽量少改动被编译的程序。** 解决交叉编译兼容性问题时，优先使用仅在 `flutter_build` 内的方案——编译器标志（`-Wno-…`）、MinGW 兼容垫片头文件、CMake 配置——而非修改插件或应用源码。源码补丁是最后手段，只作用于物化后的副本（绝不碰 pub-cache 原件），且必须保持 MSVC 兼容，确保应用在真正的 Windows 主机上仍可不加修改地构建。
 
 ---
 

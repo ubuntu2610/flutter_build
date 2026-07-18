@@ -7,6 +7,11 @@
 //
 // 补丁函数均为纯函数（输入原文 → 输出补丁后文本），便于单测；文件 I/O
 // 与符号链接物化由 [PluginSourcePatcher.apply] 编排。
+//
+// 设计原则：能用编译标志 / 垫片头文件解决的（如缺失头文件、-Werror 升级
+// 的警告），不在此处改源码——那些由 pipeline 的 `CMAKE_CXX_FLAGS` 和
+// `_materializeCompatHeaders` 统一处理。此处仅保留无法用标志/垫片解决的
+// 硬错误（类型不匹配、Clang 不接受的 MSVC 扩展语法）。
 
 import 'dart:io';
 
@@ -18,26 +23,29 @@ import '../logger.dart';
 
 /// 修补 `window_manager/windows/window_manager.cpp`：
 ///
-/// 1. 移除 `#pragma once`——该 .cpp 既被直接编译又被 `#include` 进
-///    `window_manager_plugin.cpp`，作为主文件编译时触发
-///    `-Wpragma-once-outside-header`（-Werror 升级为错误）。
-/// 2. `<Windows.h>` → `<windows.h>`——MinGW 的头文件全小写，Linux 上
-///    大小写敏感的文件系统找不到 `Windows.h`。
-/// 3. 移除类体内成员声明上的多余 `WindowManager::` 限定——MSVC 允许但
-///    Clang 视为错误 `extra qualification on member`。仅匹配缩进行（类
-///    体内），不影响类外定义（行首无缩进）。
+/// 移除类体内成员声明上的多余 `WindowManager::` 限定——MSVC 允许但
+/// Clang 视为硬错误 `extra qualification on member`。仅匹配缩进行（类
+/// 体内），不影响类外定义（行首无缩进）。
+///
+/// 其余兼容性问题（`#pragma once`、`<Windows.h>` 大小写、`codecvt` 弃用）
+/// 已由 pipeline 的全局 `CMAKE_CXX_FLAGS` 和垫片头文件解决，无需改源码。
 String patchWindowManagerCpp(String content) {
-  var out = content;
-  // 1) 移除 #pragma once
-  out = out.replaceAll('#pragma once\n', '');
-  // 2) 修复 Windows.h 大小写
-  out = out.replaceAll('#include <Windows.h>', '#include <windows.h>');
-  // 3) 移除类体内多余限定（仅缩进行的 WindowManager::）
-  out = out.replaceAllMapped(
+  return content.replaceAllMapped(
     RegExp(r'^(  +\w.*?)WindowManager::', multiLine: true),
     (m) => m.group(1)!,
   );
-  return out;
+}
+
+/// 修补 `window_manager/windows/window_manager_plugin.cpp`：
+///
+/// 移除类体内成员声明上的多余 `WindowManagerPlugin::` 限定——MSVC 允许但
+/// Clang 视为硬错误 `extra qualification on member`。仅匹配缩进行（类
+/// 体内），不影响类外定义（行首无缩进）。
+String patchWindowManagerPluginCpp(String content) {
+  return content.replaceAllMapped(
+    RegExp(r'^(  +\w.*?)WindowManagerPlugin::', multiLine: true),
+    (m) => m.group(1)!,
+  );
 }
 
 /// 修补 `hotkey_manager_windows/windows/hotkey_manager_windows_plugin.cpp`：
@@ -74,26 +82,6 @@ String patchScreenRetrieverPluginH(String content) {
       );
 }
 
-/// 给插件 `CMakeLists.txt` 追加 `-Wno-deprecated-declarations`。
-///
-/// `window_manager` 和 `screen_retriever_windows` 使用了 C++17 弃用的
-/// `std::wstring_convert` / `std::codecvt_utf8_utf16`。插件 CMakeLists.txt
-/// 已定义 `_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING`，但该宏
-/// 只对 MSVC 有效；Clang/libc++ 需要 `-Wno-deprecated-declarations`。
-String addNoDeprecatedDeclarations(String content) {
-  if (content.contains('-Wno-deprecated-declarations')) return content;
-  final re = RegExp(r'apply_standard_settings\(\$\{PLUGIN_NAME\}\)');
-  final match = re.firstMatch(content);
-  if (match == null) return content;
-  return content.replaceRange(
-    match.end,
-    match.end,
-    '\n'
-        'target_compile_options(\${PLUGIN_NAME} PRIVATE '
-        '-Wno-deprecated-declarations)',
-  );
-}
-
 // ─── 编排 ──────────────────────────────────────────────────────────
 
 /// 已知需要源码补丁的插件及其文件级补丁规则。
@@ -103,14 +91,13 @@ String addNoDeprecatedDeclarations(String content) {
 const Map<String, Map<String, String Function(String)>> _pluginPatches = {
   'window_manager': {
     'window_manager.cpp': patchWindowManagerCpp,
-    'CMakeLists.txt': addNoDeprecatedDeclarations,
+    'window_manager_plugin.cpp': patchWindowManagerPluginCpp,
   },
   'hotkey_manager_windows': {
     'hotkey_manager_windows_plugin.cpp': patchHotkeyManagerPluginCpp,
   },
   'screen_retriever_windows': {
     'screen_retriever_windows_plugin.h': patchScreenRetrieverPluginH,
-    'CMakeLists.txt': addNoDeprecatedDeclarations,
   },
 };
 

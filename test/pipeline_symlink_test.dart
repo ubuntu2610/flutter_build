@@ -200,17 +200,6 @@ void main() {
   // ── PluginSourcePatcher 纯函数补丁 ──────────────────────────────
 
   group('patchWindowManagerCpp', () {
-    test('移除 #pragma once 并修复 Windows.h 大小写', () {
-      const input = '#include "window_manager_plugin.h"\n'
-          '// This must be included before many other Windows headers.\n'
-          '#pragma once\n'
-          '#include <Windows.h>\n';
-      final out = patchWindowManagerCpp(input);
-      expect(out, isNot(contains('#pragma once')));
-      expect(out, contains('#include <windows.h>'));
-      expect(out, isNot(contains('Windows.h')));
-    });
-
     test('移除类体内多余 WindowManager:: 限定但保留类外定义', () {
       const input = 'class WindowManager {\n'
           '  void WindowManager::ForceRefresh();\n'
@@ -224,12 +213,39 @@ void main() {
       expect(out, contains('void WindowManager::ForceRefresh() {}'));
     });
 
+    test('不改动 #pragma once / Windows.h（由垫片和标志处理）', () {
+      const input = '#pragma once\n#include <Windows.h>\n';
+      expect(patchWindowManagerCpp(input), input);
+    });
+
     test('幂等：重复调用不产生变化', () {
       const input = '#pragma once\n#include <Windows.h>\n'
           '  void WindowManager::Foo();\n';
       final once = patchWindowManagerCpp(input);
       final twice = patchWindowManagerCpp(once);
       expect(twice, once);
+    });
+  });
+
+  group('patchWindowManagerPluginCpp', () {
+    test('移除类体内多余 WindowManagerPlugin:: 限定但保留类外定义', () {
+      const input = 'class WindowManagerPlugin : public flutter::Plugin {\n'
+          '  void WindowManagerPlugin::_EmitEvent(std::string eventName);\n'
+          '  std::optional<LRESULT> WindowManagerPlugin::HandleWindowProc(\n'
+          '};\n'
+          'void WindowManagerPlugin::_EmitEvent(std::string eventName) {}\n';
+      final out = patchWindowManagerPluginCpp(input);
+      expect(out, contains('  void _EmitEvent(std::string eventName);'));
+      expect(out, contains('  std::optional<LRESULT> HandleWindowProc('));
+      // 类外定义保留限定
+      expect(out,
+          contains('void WindowManagerPlugin::_EmitEvent(std::string eventName) {}'));
+    });
+
+    test('幂等', () {
+      const input = '  void WindowManagerPlugin::Foo();\n';
+      expect(patchWindowManagerPluginCpp(patchWindowManagerPluginCpp(input)),
+          patchWindowManagerPluginCpp(input));
     });
   });
 
@@ -271,28 +287,6 @@ void main() {
     });
   });
 
-  group('addNoDeprecatedDeclarations', () {
-    test('在 apply_standard_settings 后追加 -Wno-deprecated-declarations', () {
-      const input = 'apply_standard_settings(\${PLUGIN_NAME})\n'
-          'set_target_properties(\${PLUGIN_NAME} PROPERTIES CXX_VISIBILITY_PRESET hidden)\n';
-      final out = addNoDeprecatedDeclarations(input);
-      expect(out, contains('-Wno-deprecated-declarations'));
-      expect(out.indexOf('-Wno-deprecated-declarations'),
-          greaterThan(out.indexOf('apply_standard_settings')));
-    });
-
-    test('幂等：不重复追加', () {
-      const input = 'apply_standard_settings(\${PLUGIN_NAME})\n'
-          'target_compile_options(\${PLUGIN_NAME} PRIVATE -Wno-deprecated-declarations)\n';
-      expect(addNoDeprecatedDeclarations(input), input);
-    });
-
-    test('无 apply_standard_settings 时原样返回', () {
-      const input = 'add_library(foo SHARED foo.cpp)\n';
-      expect(addNoDeprecatedDeclarations(input), input);
-    });
-  });
-
   // ── PluginSourcePatcher 集成 ────────────────────────────────────
 
   test('PluginSourcePatcher 物化符号链接并应用补丁，不修改原件', () async {
@@ -306,8 +300,6 @@ void main() {
             'class WindowManager {\n'
             '  void WindowManager::Foo();\n'
             '};\n');
-    File(p.join(pluginWindows.path, 'CMakeLists.txt'))
-        .writeAsStringSync('apply_standard_settings(\${PLUGIN_NAME})\n');
 
     // 在 ephemeral/.plugin_symlinks 下创建符号链接
     final ephemeralDir = p.join(tempDir.path, 'ephemeral');
@@ -326,23 +318,18 @@ void main() {
       FileSystemEntityType.directory,
     );
 
-    // 补丁已应用到副本
+    // 补丁已应用到副本：仅移除多余限定，#pragma once / Windows.h 保留
     final cpp = File(p.join(pluginPath, 'windows', 'window_manager.cpp'))
         .readAsStringSync();
-    expect(cpp, isNot(contains('#pragma once')));
-    expect(cpp, contains('#include <windows.h>'));
+    expect(cpp, contains('#pragma once'));
+    expect(cpp, contains('#include <Windows.h>'));
     expect(cpp, contains('  void Foo();'));
-
-    final cmake = File(p.join(pluginPath, 'windows', 'CMakeLists.txt'))
-        .readAsStringSync();
-    expect(cmake, contains('-Wno-deprecated-declarations'));
+    expect(cpp, isNot(contains('WindowManager::Foo')));
 
     // pub-cache 原件未被修改
     final original =
         File(p.join(pluginRoot.path, 'windows', 'window_manager.cpp'))
             .readAsStringSync();
-    expect(original, contains('#pragma once'));
-    expect(original, contains('#include <Windows.h>'));
     expect(original, contains('void WindowManager::Foo();'));
   });
 }

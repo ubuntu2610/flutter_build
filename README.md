@@ -149,10 +149,18 @@ for CI / Docker images.
 
 Top-level flags: `-v` / `--verbose`, `--no-color`, `--cache-dir <dir>`, `--version`.
 
-### `flutter_build clean [-o path]`
+### `flutter_build clean [-o path] [--cmake]`
 
 Removes `build/win_cross/` for the current project. Does **not** touch the
 toolchain / engine cache — delete `~/.flutter_build/` yourself to wipe those.
+
+| Flag       | Purpose                                                              |
+|------------|----------------------------------------------------------------------|
+| `-o path`  | Build root to clean (default: `<project>/build/win_cross`).          |
+| `--cmake`  | Only remove `cmake_build/` for all modes, preserving intermediates   |
+|            | (kernel dill, AOT elf) and final output. Use after changing compiler |
+|            | flags or shim headers to force a CMake reconfigure without redoing   |
+|            | the expensive AOT compilation.                                       |
 
 ---
 
@@ -199,6 +207,14 @@ toolchain / engine cache — delete `~/.flutter_build/` yourself to wipe those.
 5. **ELF AOT snapshot.** `gen_snapshot --snapshot_kind=app-aot-elf` writes an
    ELF file regardless of target OS. The Flutter Windows engine has a
    built-in ELF loader that consumes it at runtime.
+
+6. **Minimize changes to the compiled app.** When fixing cross-compilation
+   issues, prefer solutions that live entirely in `flutter_build` — compiler
+   flags (`-Wno-…`), MinGW compatibility shim headers, CMake configuration —
+   over modifying plugin or app source code. Source-level patches are a last
+   resort, applied only to materialized copies (never the pub-cache original),
+   and must remain MSVC-compatible so the app still builds unmodified on a
+   real Windows host.
 
 ---
 

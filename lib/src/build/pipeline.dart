@@ -295,6 +295,11 @@ class BuildPipeline {
     await Directory(ctx.cmakeBuildDir).create(recursive: true);
     await _ensureCleanCrossCache(ctx);
 
+    // 生成 MinGW 兼容垫片头文件目录，供 CMake 以 -I 加入包含搜索路径。
+    // 解决部分 Windows SDK 头文件在 MinGW-w64 中不存在的问题（如
+    // shobjidl_core.h），无需修改插件源码。
+    final compatDir = await _materializeCompatHeaders(ctx);
+
     final configureArgs = <String>[
       '-S',
       ctx.windowsStageDir,
@@ -329,10 +334,32 @@ class BuildPipeline {
       // 3) 全部加 -static：静态链接 LLVM-MinGW 的 C++ 运行时（libc++、
       //    libunwind 等），产物自包含。否则运行时会报缺失 libc++.dll /
       //    libunwind.dll（这两个 DLL 不在普通 Windows 上）。
-      // 目标库由 CMake 工程经 target_link_libraries 指定，不依赖这些。
-      '-DCMAKE_EXE_LINKER_FLAGS=-municode -static',
-      '-DCMAKE_SHARED_LINKER_FLAGS=-static',
+      // 4) -ldwmapi：部分插件（如 window_manager）通过 MSVC 专属的
+      //    `#pragma comment(lib, "dwmapi.lib")` 指定链接库，Clang 忽略该
+      //    pragma。dwmapi 是标准 Windows 系统库，全局加上不影响不需要它的
+      //    目标（链接器只按需取符号）。shcore 由插件运行时 LoadLibrary
+      //    动态加载，不需要链接。
+      '-DCMAKE_EXE_LINKER_FLAGS=-municode -static -ldwmapi',
+      '-DCMAKE_SHARED_LINKER_FLAGS=-static -ldwmapi',
       '-DCMAKE_MODULE_LINKER_FLAGS=-static',
+      // 全局 C++ 编译标志（不修改插件源码，仅在 flutter_build 侧解决兼容性）：
+      //   -I <compatDir>  — MinGW 缺失的 Windows SDK 头文件垫片（如
+      //     shobjidl_core.h → shobjidl.h、Windows.h → windows.h）
+      //   -Wno-pragma-once-outside-header — window_manager.cpp 既是主文件
+      //     又被 #include，#pragma once 在主文件中触发 -Werror
+      //   -Wno-deprecated-declarations — wstring_convert/codecvt_utf8_utf16
+      //     在 C++17 弃用，_SILENCE_... 宏只对 MSVC 有效
+      //   -Wno-error=X — 以下警告在 MSVC (/W3) 下不诊断，但 Clang -Wall
+      //     会启用且 -Werror 升级为错误。-Wno-error=X 不受顺序影响（即使
+      //     -Werror 在后面也生效），仅降级为 warning 不改源码：
+      //     unknown-pragmas       — MSVC 专属 #pragma comment / #pragma warning
+      //     unused-const-variable — constexpr 常量定义未引用（如 kWindowClassName）
+      //     unused-local-typedef  — 函数内 typedef 名未引用（如 ACCENT_STATE）
+      '-DCMAKE_CXX_FLAGS=-I $compatDir '
+          '-Wno-pragma-once-outside-header -Wno-deprecated-declarations '
+          '-Wno-error=unknown-pragmas '
+          '-Wno-error=unused-const-variable '
+          '-Wno-error=unused-local-typedef',
     ];
     // 用净化过的环境驱动 CMake：剥离宿主（如 Flutter snap）注入的
     // CFLAGS/CXXFLAGS/LDFLAGS 等，否则 -lepoxy/-lfontconfig 等 Linux 库会
@@ -357,6 +384,49 @@ class BuildPipeline {
       environment: crossEnv,
       includeParentEnvironment: false,
     );
+  }
+
+  /// MinGW-w64 缺失的 Windows SDK 头文件垫片。
+  ///
+  /// key: 被引用的头文件名（`#include <...>` 中的名字）；
+  /// value: 垫片内容（通常 `#include` 等价的 MinGW 头文件）。
+  ///
+  /// 这些垫片写入构建中间目录，通过 `CMAKE_CXX_FLAGS` 的 `-I` 加入搜索
+  /// 路径，从而让插件源码中 `#include <shobjidl_core.h>` 等无需修改即可
+  /// 在 MinGW 下编译。
+  static const Map<String, String> _mingwCompatHeaders = {
+    // Windows 10 SDK 拆分出的核心 shell 接口头文件，MinGW-w64 只有 shobjidl.h。
+    'shobjidl_core.h': '// flutter_build MinGW compatibility shim\n'
+        '// shobjidl_core.h is a Windows 10 SDK header absent from MinGW-w64;\n'
+        '// its interfaces are available via shobjidl.h.\n'
+        '#ifndef _FLUTTER_BUILD_SHOBJIDL_CORE_SHIM\n'
+        '#define _FLUTTER_BUILD_SHOBJIDL_CORE_SHIM\n'
+        '#include <shobjidl.h>\n'
+        '#endif\n',
+    // 大小写问题：MinGW 头文件全小写，Linux 文件系统大小写敏感。
+    'Windows.h': '// flutter_build MinGW compatibility shim\n'
+        '// On case-sensitive filesystems <Windows.h> is not found because\n'
+        '// MinGW ships the header as <windows.h> (lowercase).\n'
+        '#ifndef _FLUTTER_BUILD_WINDOWS_H_SHIM\n'
+        '#define _FLUTTER_BUILD_WINDOWS_H_SHIM\n'
+        '#include <windows.h>\n'
+        '#endif\n',
+  };
+
+  /// 在构建中间目录下生成 MinGW 兼容垫片头文件，返回该目录路径。
+  ///
+  /// 仅在文件不存在或内容变化时写入，避免增量构建中因时间戳变化触发
+  /// ninja 全量重编。
+  Future<String> _materializeCompatHeaders(BuildContext ctx) async {
+    final dir = Directory(p.join(ctx.intermediatesDir, 'mingw_compat'));
+    await dir.create(recursive: true);
+    for (final entry in _mingwCompatHeaders.entries) {
+      final file = File(p.join(dir.path, entry.key));
+      if (!file.existsSync() || file.readAsStringSync() != entry.value) {
+        await file.writeAsString(entry.value);
+      }
+    }
+    return dir.path;
   }
 
   /// 把构建产物组装到最终输出目录，布局与 Windows 上 `flutter build` 一致：
@@ -421,6 +491,14 @@ class BuildPipeline {
   /// release/profile 不含 kernel_blob（用 app.so）；debug 会带 kernel_blob 及快照。
   Future<void> _bundleFlutterAssets(BuildContext ctx) async {
     _log.info('  生成 flutter_assets（flutter assemble copy_flutter_bundle）…');
+    // flutter assemble 在面向 windows-x64 时会读取 PROGRAMFILES(X86) 来探测
+    // Visual Studio 路径。Linux 上该变量不存在，导致 dart_build target 直接
+    // 报错退出。设为空字符串即可绕过探测——copy_flutter_bundle 只需 Dart 产物
+    // （kernel / AOT），不需要 MSVC。includeParentEnvironment 默认 true，此
+    // map 仅追加一个变量，不覆盖宿主 PATH 等。
+    final env = <String, String>{
+      'PROGRAMFILES(X86)': '',
+    };
     await _runner.run(
       p.join(ctx.env.sdkRoot, 'bin', 'flutter'),
       <String>[
@@ -432,6 +510,7 @@ class BuildPipeline {
         'copy_flutter_bundle',
       ],
       workingDirectory: ctx.project.root,
+      environment: env,
       stream: true,
       tag: 'assemble',
     );
