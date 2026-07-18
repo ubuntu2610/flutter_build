@@ -1,8 +1,8 @@
 // 给 Windows runner 注入调试信息，让引擎日志默认显示在启动它的控制台
-// （PowerShell / cmd）里，用于排查“运行后无窗口、无提示”的静默失败。
+// （PowerShell / cmd）里，用于排查"运行后无窗口、无提示"的静默失败。
 //
 // 背景：Flutter 的 runner 是 GUI 子系统程序（-mwindows）。标准 main.cpp 只在
-// “检测到调试器”时才创建控制台，且从 PowerShell 启动时虽然会 AttachConsole 到
+// "检测到调试器"时才创建控制台，且从 PowerShell 启动时虽然会 AttachConsole 到
 // 父控制台，却**没有把 stdout/stderr 重开到 CONOUT$**，所以引擎的 stderr 日志
 // 根本出不来；窗口/引擎启动失败时还会直接 `return EXIT_FAILURE` 静默退出。
 //
@@ -10,11 +10,11 @@
 //   1) 附着到启动它的控制台（PowerShell/cmd），没有则新建一个；随后 freopen
 //      stdout/stderr 到 CONOUT$ 并调用 FlutterDesktopResyncOutputStreams()，
 //      使引擎日志实时显示在该控制台；
-//   2) 启动失败时弹 MessageBox —— 双击（无父控制台）时控制台会一闪而过，
-//      弹框可确保失败信息不被错过；
+//   2) 启动失败时向 stderr 输出诊断信息（data/flutter_assets 或 data/app.so
+//      缺失等常见原因）；
 //   3) 运行时保持占用启动它的控制台，关闭程序（窗口）后才释放控制台并
 //      干净退出——即 PowerShell/cmd 在程序运行期间不会回到提示符，关闭
-//      程序后才回到提示符，避免“关掉程序后控制台不退出 / 日志丢失”。
+//      程序后才回到提示符，避免"关掉程序后控制台不退出 / 日志丢失"。
 //
 // 只放纯函数（便于单测）；实际读写文件由 pipeline 编排。默认开启，可用
 // `--no-debug-console` 关闭（发布干净版本时）。
@@ -25,7 +25,7 @@ const String _sentinel = '// flutter_build debug instrumentation';
 /// 标准 main.cpp 里 utils.h 的引入行（在其后补所需头文件）。
 const String _utilsInclude = '#include "utils.h"';
 
-/// 标准 main.cpp 里创建控制台的代码块（整体替换为“始终附着/新建控制台并重开流”）。
+/// 标准 main.cpp 里创建控制台的代码块（整体替换为"始终附着/新建控制台并重开流"）。
 const String _consoleBlock =
     '  if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {\n'
     '    CreateAndAttachConsole();\n'
@@ -75,18 +75,12 @@ String instrumentRunnerMain(String source) {
     );
   }
 
-  // 3) 启动失败处（window.Create 失败）：记日志 + 弹 MessageBox。
+  // 3) 启动失败处（window.Create 失败）：向 stderr 输出诊断信息。
   if (out.contains(_failReturn)) {
     out = out.replaceFirst(
       _failReturn,
       'fprintf(stderr, "[flutter_build] engine/window failed to start "\n'
       '        "(likely empty data/flutter_assets or missing data/app.so)\\n");\n'
-      '    fflush(stderr);\n'
-      '    ::MessageBoxW(nullptr,\n'
-      '        L"flutter_build: engine/window failed to start.\\n"\n'
-      '        L"Run from PowerShell to see engine logs, or check that\\n"\n'
-      '        L"data/flutter_assets and data/app.so exist.",\n'
-      '        L"flutter_build debug", MB_OK | MB_ICONERROR);\n'
       '    fflush(stderr);\n'
       '    ::FreeConsole();\n'
       '    $_failReturn',

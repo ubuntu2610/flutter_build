@@ -41,7 +41,7 @@ class BuildContext {
   final bool treeShakeIcons;
   final bool verbose;
 
-  /// 是否给 runner 注入调试信息（始终开控制台 + 失败弹 MessageBox），
+  /// 是否给 runner 注入调试信息（始终开控制台 + 失败输出 stderr 诊断），
   /// 用于排查在 Windows 上运行后无窗口/静默退出的问题。由 `--debug-console` 控制。
   final bool debugConsole;
 

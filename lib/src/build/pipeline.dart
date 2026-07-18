@@ -107,7 +107,7 @@ class BuildPipeline {
     if (ctx.debugConsole) await _instrumentRunner(ctx);
   }
 
-  /// 给暂存的 runner/main.cpp 注入调试信息（始终开控制台 + 启动失败弹窗）。
+  /// 给暂存的 runner/main.cpp 注入调试信息（始终开控制台 + 启动失败输出 stderr）。
   /// 仅在 --debug-console 时调用，不影响正常发布构建。
   Future<void> _instrumentRunner(BuildContext ctx) async {
     final mainCpp = File(p.join(ctx.windowsStageDir, 'runner', 'main.cpp'));
@@ -118,7 +118,7 @@ class BuildPipeline {
     final patched = instrumentRunnerMain(await mainCpp.readAsString());
     await mainCpp.writeAsString(patched);
     _log.info('已注入调试信息（默认开启，--no-debug-console 可关）：'
-        '从 PowerShell/cmd 运行可看到引擎日志，启动失败会弹 MessageBox。');
+        '从 PowerShell/cmd 运行可看到引擎日志，启动失败输出 stderr 诊断。');
   }
 
   /// 对暂存目录下 `.plugin_symlinks/` 中已知有 Clang/MinGW 兼容问题的插件
@@ -218,6 +218,31 @@ class BuildPipeline {
             '跳过 flutter_assemble 中和（可能是非标准模板）。');
       } else {
         await flutterCmake.writeAsString(patched);
+      }
+    }
+
+    // Patch generated_plugins.cmake：为每个插件目标设置 PREFIX "" IMPORT_PREFIX ""。
+    // SDK 生成的文件不含此设置（MSVC 不加 lib 前缀），但 MinGW 默认给 shared
+    // library 加 lib 前缀（libfoo.dll）。PREFIX "" 去掉 DLL 前缀，IMPORT_PREFIX ""
+    // 去掉导入库（.dll.a）前缀——否则 dlltool 从导入库文件名推导依赖 DLL 名时
+    // 会加 lib 前缀，导致 EXE 运行时寻找 libfoo.dll 而实际产物是 foo.dll。
+    // 仅 patch 普通插件循环（${plugin}），FFI 插件（${ffi_plugin}）不创建
+    // _plugin 目标，无需设置。
+    final generatedPlugins =
+        File(p.join(stagedFlutterDir, 'generated_plugins.cmake'));
+    if (generatedPlugins.existsSync()) {
+      final content = await generatedPlugins.readAsString();
+      if (!content.contains('IMPORT_PREFIX')) {
+        const marker =
+            '  add_subdirectory(flutter/ephemeral/.plugin_symlinks/\${plugin}/windows plugins/\${plugin})';
+        const insertion = '$marker\n'
+            '  set_target_properties(\${plugin}_plugin PROPERTIES PREFIX "" IMPORT_PREFIX "")';
+        final patched = content.replaceAll(marker, insertion);
+        if (patched != content) {
+          await generatedPlugins.writeAsString(patched);
+          _log.debug('已为插件目标设置 PREFIX "" IMPORT_PREFIX "" '
+              '以去除 MinGW lib 前缀。');
+        }
       }
     }
   }
@@ -487,20 +512,26 @@ class BuildPipeline {
       await File(engineDll).copy(p.join(outDir, 'flutter_windows.dll'));
     }
 
-    // 插件 DLL：从 cmake_build/plugins/ 拷到产物目录（exe 同级）。
-    // generated_plugins.cmake 已设 PREFIX "" 去掉 MinGW 的 lib 前缀，
-    // 此处额外做 lib 前缀剥离作为兜底。
-    final pluginsDir = Directory(p.join(ctx.cmakeBuildDir, 'plugins'));
-    if (pluginsDir.existsSync()) {
+    // 插件 DLL：从 cmake_build/ 整个目录递归查找 .dll，拷到产物目录。
+    // generated_plugins.cmake 已设 PREFIX "" IMPORT_PREFIX "" 去掉 MinGW
+    // 的 lib 前缀（DLL 和导入库均去除），此处直接按原始文件名拷贝即可。
+    final cmakeBuild = Directory(ctx.cmakeBuildDir);
+    if (cmakeBuild.existsSync()) {
       for (final entity
-          in pluginsDir.listSync(recursive: true, followLinks: false)) {
+          in cmakeBuild.listSync(recursive: true, followLinks: false)) {
         if (entity is! File) continue;
         final name = p.basename(entity.path);
         if (!name.endsWith('.dll')) continue;
-        final cleanName = name.startsWith('lib') ? name.substring(3) : name;
-        await entity.copy(p.join(outDir, cleanName));
+        final dest = p.join(outDir, name);
+        if (!File(dest).existsSync()) await entity.copy(dest);
       }
     }
+
+    // 预构建 DLL：部分插件依赖预编译的 Windows DLL（如 opencv_world490.dll），
+    // 这些 DLL 在插件 CMakeLists.txt 中以 Windows 路径引用（C:/...），
+    // Linux 上 if(EXISTS ...) 失败导致不会自动拷贝。在项目树的上级目录中
+    // 搜索 .dll 文件并拷到产物目录，尽量贴近 Windows 打包结果。
+    await _copyPrebuiltDlls(ctx, outDir);
     await Directory(dataDir).create(recursive: true);
     if (File(ctx.artifacts.icudtl).existsSync()) {
       await File(ctx.artifacts.icudtl).copy(p.join(dataDir, 'icudtl.dat'));
@@ -521,6 +552,66 @@ class BuildPipeline {
           '应用在 Windows 上很可能无窗口/静默退出。');
       _log.warn('从 PowerShell 运行 exe 可看到引擎日志'
           '（调试信息默认已注入）。');
+    }
+  }
+
+  /// 在项目树中搜索预构建的 Windows DLL 并拷到产物目录。
+  ///
+  /// 某些插件依赖预编译的 Windows DLL（如 opencv_world490.dll），插件
+  /// CMakeLists.txt 用 Windows 绝对路径引用（C:/...），Linux 上
+  /// `if(EXISTS ...)` 失败导致不会自动拷贝。此处从项目根的上级目录
+  /// 递归搜索 .dll 文件（跳过 build/ .dart_tool/ .pub-cache/ .git/ 等），
+  /// 将未已在产物目录中的 DLL 拷入，尽量贴近 Windows 打包结果。
+  Future<void> _copyPrebuiltDlls(BuildContext ctx, String outDir) async {
+    // 已在产物目录中的 DLL（小写比较，避免大小写重复）
+    final existing = <String>{};
+    for (final entity in Directory(outDir).listSync()) {
+      if (entity is File) {
+        final name = p.basename(entity.path);
+        if (name.endsWith('.dll')) existing.add(name.toLowerCase());
+      }
+    }
+
+    // 从项目根的祖父目录搜索（覆盖 libcimbar 和 paddle_ocr 等兄弟目录）
+    final searchRoot = p.dirname(p.dirname(ctx.project.root));
+    final found = <File>[];
+    _findDlls(Directory(searchRoot), found, 0, 5);
+
+    for (final dll in found) {
+      final name = p.basename(dll.path);
+      if (existing.contains(name.toLowerCase())) continue;
+      await dll.copy(p.join(outDir, name));
+      _log.info('  预构建 DLL: $name');
+      existing.add(name.toLowerCase());
+    }
+  }
+
+  /// 递归搜索 .dll 文件，限制深度 [maxDepth]，跳过构建/缓存目录。
+  void _findDlls(Directory dir, List<File> results, int depth, int maxDepth) {
+    if (depth > maxDepth) return;
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync(followLinks: false)) {
+      if (entity is File) {
+        if (entity.path.endsWith('.dll')) {
+          results.add(entity);
+        }
+      } else if (entity is Directory) {
+        final name = p.basename(entity.path);
+        if ([
+          'build',
+          '.dart_tool',
+          '.pub-cache',
+          '.git',
+          '.flutter_build',
+          'snap',
+          'proc',
+          'sys',
+          'dev',
+        ].contains(name)) {
+          continue;
+        }
+        _findDlls(entity, results, depth + 1, maxDepth);
+      }
     }
   }
 

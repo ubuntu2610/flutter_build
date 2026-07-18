@@ -167,10 +167,12 @@ class FlutterProject {
       ..writeln(
           '  add_subdirectory(flutter/ephemeral/.plugin_symlinks/\${plugin}/windows plugins/\${plugin})')
       // MinGW 给 shared library 加 lib 前缀（libfoo.dll），但 Windows 运行时
-      // 期望 MSVC 命名（foo.dll）。设 PREFIX "" 去掉前缀，与 flutter build
-      // 在 Windows + MSVC 下的产物一致。
+      // 期望 MSVC 命名（foo.dll）。设 PREFIX "" 去掉 DLL 前缀，同时设
+      // IMPORT_PREFIX "" 去掉导入库（.dll.a）前缀——否则 dlltool 会从导入库
+      // 文件名推导依赖的 DLL 名（libfoo.dll），导致 EXE 运行时寻找带 lib
+      // 前缀的 DLL 而找不到实际产物 foo.dll。
       ..writeln(
-          '  set_target_properties(\${plugin}_plugin PROPERTIES PREFIX "")')
+          '  set_target_properties(\${plugin}_plugin PROPERTIES PREFIX "" IMPORT_PREFIX "")')
       ..writeln(
           '  target_link_libraries(\${BINARY_NAME} PRIVATE \${plugin}_plugin)')
       ..writeln(

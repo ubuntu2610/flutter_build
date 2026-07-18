@@ -44,20 +44,18 @@ void main() {
       expect(out, isNot(contains('flutter_build_debug.log')));
     });
 
-    test('启动失败处注入 MessageBox', () {
+    test('启动失败处注入 stderr 诊断', () {
       final out = instrumentRunnerMain(_sampleMain);
-      expect(out, contains('MessageBoxW'));
       expect(out, contains('failed to start'));
-      expect(out.indexOf('MessageBoxW'),
+      expect(out.indexOf('failed to start'),
           lessThan(out.indexOf('return EXIT_FAILURE;')));
       expect(out, contains('return EXIT_SUCCESS;')); // 成功路径不受影响
     });
 
-    test('幂等：重复注入内容不变、MessageBox 只有一处', () {
+    test('幂等：重复注入内容不变', () {
       final once = instrumentRunnerMain(_sampleMain);
       final twice = instrumentRunnerMain(once);
       expect(twice, once);
-      expect('MessageBoxW'.allMatches(twice).length, 1);
     });
 
     test('找不到标记时仅加哨兵、可重复调用稳定', () {
