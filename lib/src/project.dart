@@ -86,6 +86,14 @@ class FlutterProject {
   /// exists before construction.
   String get packageConfig => p.join(root, '.dart_tool', 'package_config.json');
 
+  /// `.dart_tool/flutter_build/dart_plugin_registrant.dart` — 由 `flutter pub
+  /// get` / `flutter build` 生成，负责注册纯 Dart 实现的插件（如
+  /// path_provider_windows、shared_preferences_windows）。frontend_server 需要
+  /// 用 `--source` + `-Dflutter.dart_plugin_registrant` 接入它，否则运行时会
+  /// 报 MissingPluginException（方法通道无实现）。
+  String get dartPluginRegistrant => p.join(
+      root, '.dart_tool', 'flutter_build', 'dart_plugin_registrant.dart');
+
   /// pubspec 的 `version` 字段（如 `1.0.0+1`）。用于生成 ephemeral/
   /// generated_config.cmake 里的 FLUTTER_VERSION* 变量。缺省时为 null。
   String? get versionString => pubspec['version']?.toString();

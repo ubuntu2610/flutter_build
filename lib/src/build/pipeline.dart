@@ -262,6 +262,20 @@ class BuildPipeline {
     if (ctx.treeShakeIcons) {
       _log.debug('note: icon tree-shaking 尚未在打包阶段实现，本次不生效。');
     }
+    // Dart 插件注册器：path_provider_windows / shared_preferences_windows 等
+    // 纯 Dart 实现的插件，其 registerWith() 由 Flutter 生成的
+    // dart_plugin_registrant.dart 调用。必须像 flutter_tools 那样把它作为
+    // --source 传给 frontend_server，并用 -Dflutter.dart_plugin_registrant 指定
+    // 其 URI；否则运行时会 MissingPluginException（如 path_provider 的
+    // getApplicationDocumentsDirectory 无实现）。
+    final registrant = File(ctx.project.dartPluginRegistrant).absolute;
+    final hasRegistrant = registrant.existsSync();
+    if (hasRegistrant) {
+      _log.debug('接入 Dart 插件注册器：${registrant.path}');
+    } else {
+      _log.debug('未找到 dart_plugin_registrant.dart；若用到纯 Dart 插件'
+          '（path_provider_windows 等），请先在项目里执行 flutter pub get。');
+    }
     final args = <String>[
       ctx.env.frontendServerSnapshot,
       '--sdk-root',
@@ -278,6 +292,14 @@ class BuildPipeline {
       for (final define in ctx.dartDefines) '--define=$define',
       '--packages',
       ctx.project.packageConfig,
+      // 纯 Dart 插件注册（见上）：与 flutter_tools KernelSnapshot 一致。
+      if (hasRegistrant) ...[
+        '--source',
+        registrant.path,
+        '--source',
+        'package:flutter/src/dart_plugin_registrant.dart',
+        '-Dflutter.dart_plugin_registrant=${registrant.uri}',
+      ],
       '--output-dill',
       ctx.kernelDill,
       ctx.project.entryPoint,
