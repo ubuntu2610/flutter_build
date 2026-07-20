@@ -16,8 +16,9 @@
 //      干净退出——即 PowerShell/cmd 在程序运行期间不会回到提示符，关闭
 //      程序后才回到提示符，避免"关掉程序后控制台不退出 / 日志丢失"。
 //
-// 只放纯函数（便于单测）；实际读写文件由 pipeline 编排。默认开启，可用
-// `--no-debug-console` 关闭（发布干净版本时）。
+// 只放纯函数（便于单测）；实际读写文件由 pipeline 编排。默认关闭，用
+// `--debug-console` 开启（排查静默失败时）；发布/日常构建保持关闭，产出
+// 干净的 GUI 程序，双击打开不弹控制台窗口。
 
 /// 幂等哨兵：已注入则不再重复。
 const String _sentinel = '// flutter_build debug instrumentation';

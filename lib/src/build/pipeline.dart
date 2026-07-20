@@ -117,8 +117,9 @@ class BuildPipeline {
     }
     final patched = instrumentRunnerMain(await mainCpp.readAsString());
     await mainCpp.writeAsString(patched);
-    _log.info('已注入调试信息（默认开启，--no-debug-console 可关）：'
-        '从 PowerShell/cmd 运行可看到引擎日志，启动失败输出 stderr 诊断。');
+    _log.info('已注入调试信息（--debug-console 显式开启）：'
+        '从 PowerShell/cmd 运行可看到引擎日志，启动失败输出 stderr 诊断；'
+        '注意此模式下双击运行会新建控制台窗口。');
   }
 
   /// 对暂存目录下 `.plugin_symlinks/` 中已知有 Clang/MinGW 兼容问题的插件
