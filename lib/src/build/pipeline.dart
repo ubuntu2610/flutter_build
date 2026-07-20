@@ -552,8 +552,73 @@ class BuildPipeline {
       _log.warn('data/flutter_assets 仍为空：资源打包可能失败，'
           '应用在 Windows 上很可能无窗口/静默退出。');
       _log.warn('从 PowerShell 运行 exe 可看到引擎日志'
-          '（调试信息默认已注入）。');
+          '（可加 --debug-console 构建以查看）。');
     }
+
+    // 编译期校验：插件声明要打包、却缺失的预编译原生 DLL（避免留到运行时）。
+    _verifyPluginNativeDlls(ctx, outDir);
+  }
+
+  /// 校验插件在 `windows/CMakeLists.txt` 里声明要打包的预编译 DLL（如
+  /// `libcimbar.dll`、`opencv_world490.dll`）是否真的进了产物。这类 DLL 常以
+  /// Windows 绝对路径（`C:/...`）或“另行预编译”的产物路径引用，并被
+  /// `if(EXISTS ...)` 包裹——Linux 交叉构建时文件不存在就被静默跳过，最终只在
+  /// Windows 上运行时才暴露为 `DynamicLibrary.open` 失败（如
+  /// “Bad state: ... is not ready”）。此处在编译阶段就把缺失项显著报出来。
+  void _verifyPluginNativeDlls(BuildContext ctx, String outDir) {
+    // 产物目录里已有的 DLL（小写基名）。
+    final present = <String>{};
+    for (final entity in Directory(outDir).listSync()) {
+      if (entity is File && entity.path.toLowerCase().endsWith('.dll')) {
+        present.add(p.basename(entity.path).toLowerCase());
+      }
+    }
+
+    // 基名 -> 原始引用（保留原始路径用于说明缺失原因）。
+    final missing = <String, String>{};
+    for (final plugin in ctx.project.plugins.where((pl) => pl.hasNativeCode)) {
+      final cmake = File(p.join(plugin.windowsCMakeDir, 'CMakeLists.txt'));
+      if (!cmake.existsSync()) continue;
+      for (final ref in referencedDllPaths(cmake.readAsStringSync())) {
+        final base = p.basename(ref.replaceAll(r'\', '/'));
+        if (present.contains(base.toLowerCase())) continue;
+        missing.putIfAbsent(base, () => ref);
+      }
+    }
+    if (missing.isEmpty) return;
+
+    _log.warn('原生 DLL 缺失：以下 DLL 被插件声明要随产物一起打包，但本次交叉');
+    _log.warn('构建的产物目录里没有——应用在 Windows 上运行时会因加载不到它们而');
+    _log.warn('失败（如 "Bad state: ... is not ready"）：');
+    missing.forEach((base, ref) {
+      final reason = _looksLikeWindowsAbsPath(ref)
+          ? '硬编码 Windows 路径，交叉环境不存在'
+          : 'Windows 预编译产物路径，未在 Linux 侧生成';
+      _log.warn('  ✗ $base（$reason：$ref）');
+    });
+    _log.hint('解决：在 Linux 侧交叉编译出这些 DLL 放入产物目录，或从 Windows'
+        ' 拷入同目录；若确非必需可忽略此告警。');
+  }
+
+  /// 判断 CMake 引用的路径是否是 Windows 绝对路径（盘符开头，如 `C:/...`）。
+  static bool _looksLikeWindowsAbsPath(String ref) =>
+      RegExp(r'^[A-Za-z]:[\\/]').hasMatch(ref);
+
+  /// 从 CMake 文件内容里提取被引用的 `.dll` 字面路径（剔除 `#` 行注释；不含
+  /// `$<TARGET_FILE:...>` 等由构建自动产生的目标）。纯函数，便于单测。
+  static List<String> referencedDllPaths(String cmakeContent) {
+    final out = <String>[];
+    for (final rawLine in cmakeContent.split('\n')) {
+      final hash = rawLine.indexOf('#'); // 去掉 CMake 行注释（# 到行尾）。
+      final line = hash >= 0 ? rawLine.substring(0, hash) : rawLine;
+      for (final m in RegExp(r'''[^\s"'()]+\.dll''', caseSensitive: false)
+          .allMatches(line)) {
+        final ref = m.group(0)!;
+        if (ref.contains(r'$<')) continue; // 生成器表达式目标，非预编译 DLL。
+        out.add(ref);
+      }
+    }
+    return out;
   }
 
   /// 在项目树中搜索预构建的 Windows DLL 并拷到产物目录。
