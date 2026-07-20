@@ -45,8 +45,9 @@ class PluginSourcePatcher {
   /// 对 [ephemeralDir]（`flutter/ephemeral/`）下的插件链接应用补丁。
   ///
   /// 需要补丁的插件目录会从符号链接替换为真实副本（不修改 pub-cache 原
-  /// 件），然后对副本做文本补丁。当前 `_pluginPatches` 为空，此方法为
-  /// no-op。
+  /// 件），然后对副本做文本补丁。当前 `_pluginPatches` 含 1 条规则
+  /// （hotkey_manager_windows 的 EncodableMap 初始化，见上文说明）；若某项目
+  /// 未依赖该插件，对应链接不存在时会被静默跳过。
   Future<void> apply(String ephemeralDir, {Logger? logger}) async {
     if (_pluginPatches.isEmpty) return;
     final log = logger ?? Logger.instance;

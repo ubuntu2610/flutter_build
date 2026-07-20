@@ -249,7 +249,7 @@ class BuildPipeline {
 
   /// 翻译暂存目录里所有 CMakeLists.txt 的 MSVC 标志。
   Future<void> _translateFlags(BuildContext ctx) async {
-    await const MsvcFlagTranslator().transformTree(ctx.windowsStageDir);
+    await MsvcFlagTranslator(logger: _log).transformTree(ctx.windowsStageDir);
   }
 
   /// 用 frontend_server 把 Dart 入口编译成 kernel `.dill`。

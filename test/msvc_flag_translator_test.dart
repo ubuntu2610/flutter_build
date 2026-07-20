@@ -108,4 +108,92 @@ APPLY_STANDARD_SETTINGS(foo)
       expect(file.readAsStringSync(), '/W3 /WX');
     });
   });
+
+  group('扩展标志映射', () {
+    test('/W4 转为 -Wall -Wextra', () async {
+      final out = await translate('add_compile_options(/W4)');
+      expect(out, contains('-Wall -Wextra'));
+      expect(out, isNot(contains('/W4')));
+    });
+
+    test('/std:c++20 转为 -std=c++20', () async {
+      final out = await translate(
+        r'target_compile_options(x PRIVATE /std:c++20)',
+      );
+      expect(out, contains('-std=c++20'));
+    });
+
+    test('/permissive- 与 /MP 被移除', () async {
+      final out = await translate('add_compile_options(/permissive- /MP)');
+      expect(out, isNot(contains('/permissive-')));
+      expect(out, isNot(contains('/MP')));
+    });
+
+    test('/GS- 转为 -fno-stack-protector', () async {
+      final out = await translate('add_compile_options(/GS-)');
+      expect(out, contains('-fno-stack-protector'));
+    });
+  });
+
+  group('APPLY_STANDARD_SETTINGS 双分支', () {
+    test('保留 MSVC 分支并生成 else 分支', () async {
+      const input = '''
+function(APPLY_STANDARD_SETTINGS TARGET)
+  target_compile_options(\${TARGET} PRIVATE /W4 /WX /wd"4100")
+  target_compile_options(\${TARGET} PRIVATE /EHsc)
+  target_compile_definitions(\${TARGET} PRIVATE "_HAS_EXCEPTIONS=0")
+endfunction()
+''';
+      final out = await translate(input);
+      expect(out, contains('if(MSVC)'));
+      expect(out, contains('else()'));
+      expect(out, contains('endif()'));
+      // MSVC 分支保留原始 MSVC 标志（未被翻译成 GCC 形式）。
+      expect(out, contains('/W4 /WX'));
+      // MinGW/Clang 分支使用等价 GCC 标志。
+      expect(out, contains('-Wall -Werror'));
+    });
+
+    test('保留原始参数名', () async {
+      const input = '''
+function(APPLY_STANDARD_SETTINGS MYTARGET)
+  target_compile_options(\${MYTARGET} PRIVATE /W3)
+endfunction()
+''';
+      final out = await translate(input);
+      expect(out, contains('function(APPLY_STANDARD_SETTINGS MYTARGET)'));
+      expect(out, contains(r'${MYTARGET}'));
+    });
+  });
+
+  group('_HAS_EXCEPTIONS 中和', () {
+    test('独立的 _HAS_EXCEPTIONS=0 改写为 MSVC 生成器表达式', () async {
+      final out = await translate(
+        'target_compile_definitions(app PRIVATE "_HAS_EXCEPTIONS=0")',
+      );
+      expect(out, contains(r'$<$<CXX_COMPILER_ID:MSVC>:_HAS_EXCEPTIONS=0>'));
+      expect(out, isNot(contains('"_HAS_EXCEPTIONS=0"')));
+    });
+  });
+
+  group('未识别标志告警', () {
+    test('未知 /Qxxx 标志被记录为告警', () {
+      final warnings = <String>[];
+      const MsvcFlagTranslator().transformContent(
+        r'target_compile_options(x PRIVATE /W3 /Qunknown)',
+        warnings: warnings,
+      );
+      expect(warnings, isNotEmpty);
+      expect(warnings.join(), contains('/Qunknown'));
+    });
+
+    test('路径片段不触发误报', () {
+      final warnings = <String>[];
+      const MsvcFlagTranslator().transformContent(
+        'add_compile_options(-I /usr/include)',
+        warnings: warnings,
+      );
+      expect(warnings, isEmpty);
+    });
+  });
 }
