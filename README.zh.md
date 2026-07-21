@@ -1,5 +1,7 @@
 # flutter_build
 
+[English](README.md) | [简体中文](README.zh.md)
+
 在 **Linux** 上交叉编译 Flutter Windows (x86_64) 桌面应用——无需 MSVC、无需 Windows SDK、无需 Windows 虚拟机。
 
 - C/C++ 工具链：[LLVM-MinGW](https://github.com/mstorsjo/llvm-mingw)（Clang + LLD + mingw-w64）

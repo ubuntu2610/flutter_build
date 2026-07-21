@@ -1,5 +1,7 @@
 # flutter_build
 
+[English](README.md) | [简体中文](README.zh.md)
+
 Cross-compile Flutter Windows (x86_64) desktop applications **on Linux** — no
 MSVC, no Windows SDK, no Windows VM.
 
