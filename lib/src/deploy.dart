@@ -19,6 +19,7 @@ import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart';
 
 import 'exceptions.dart';
+import 'io/fs_utils.dart';
 import 'logger.dart';
 import 'process_runner.dart';
 
@@ -181,7 +182,7 @@ class SshDeployer {
     }
     final remotePath = config.remotePathFor(localDir);
     final remoteParent = _posixDirname(remotePath);
-    final bytes = _dirSize(dir);
+    final bytes = dirSize(dir);
 
     if (config.password != null) {
       await _requireTool('sshpass', '密码登录需要 sshpass：sudo apt install sshpass');
@@ -271,14 +272,6 @@ class SshDeployer {
   static String _posixDirname(String path) {
     final i = path.lastIndexOf('/');
     return i <= 0 ? path : path.substring(0, i);
-  }
-
-  int _dirSize(Directory dir) {
-    var total = 0;
-    for (final e in dir.listSync(recursive: true)) {
-      if (e is File) total += e.lengthSync();
-    }
-    return total;
   }
 
   String _fmtBytes(int b) {

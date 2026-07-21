@@ -5,42 +5,11 @@ import 'package:flutter_build/src/build/msvc_flag_translator.dart';
 import 'package:flutter_build/src/build/pipeline.dart';
 import 'package:flutter_build/src/build/plugin_source_patcher.dart';
 import 'package:flutter_build/src/engine_artifacts.dart';
-import 'package:flutter_build/src/flutter_env.dart';
 import 'package:flutter_build/src/project.dart';
-import 'package:flutter_build/src/toolchain.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-FlutterEnv _stubEnv() => FlutterEnv.forTesting(
-      sdkRoot: '/sdk',
-      flutterVersion: '3.22.0',
-      dartSdkVersion: '3.5.0',
-      engineCommitHash: 'abc123',
-      engineRealm: '',
-      storageBaseUrl: 'https://storage.googleapis.com',
-      dartExecutable: '/sdk/bin/cache/dart-sdk/bin/dart',
-      frontendServerSnapshot:
-          '/sdk/bin/cache/artifacts/engine/linux-x64/frontend_server_aot.dart.snapshot',
-      hostEngineDir: '/sdk/bin/cache/artifacts/engine/linux-x64',
-    );
-
-EngineArtifacts _stubArtifacts() => EngineArtifacts(
-      env: _stubEnv(),
-      embedderDir: '/sdk/bin/cache/artifacts/engine/windows-x64',
-      releaseArtifactsDir:
-          '/sdk/bin/cache/artifacts/engine/windows-x64-release',
-      profileArtifactsDir:
-          '/sdk/bin/cache/artifacts/engine/windows-x64-profile',
-      hostEngineDir: '/sdk/bin/cache/artifacts/engine/linux-x64',
-    );
-
-Toolchain _stubToolchain() => Toolchain(
-      llvmMingwRoot: '/opt/llvm-mingw',
-      targetTriple: 'x86_64-w64-mingw32',
-      wineExecutable: '/usr/bin/wine64',
-      cmakeExecutable: '/usr/bin/cmake',
-      ninjaExecutable: '/usr/bin/ninja',
-    );
+import 'support/stubs.dart';
 
 void main() {
   late Directory tempDir;
@@ -147,12 +116,9 @@ void main() {
       ..createSync(recursive: true)
       ..writeAsStringSync('add_library(plugin SHARED plugin.cpp)\n');
 
-    final project = FlutterProject.forTesting(
+    final project = stubProject(
       root: p.join(tempDir.path, 'app'),
       appName: 'app',
-      entryPoint: p.join(tempDir.path, 'app', 'lib', 'main.dart'),
-      windowsDir: p.join(tempDir.path, 'app', 'windows'),
-      hasWindowsScaffold: true,
       plugins: [
         WindowsPluginRef(
           name: 'sample_plugin',
@@ -162,10 +128,10 @@ void main() {
       ],
     );
     final ctx = BuildContext(
-      env: _stubEnv(),
+      env: stubEnv(),
       project: project,
-      artifacts: _stubArtifacts(),
-      toolchain: _stubToolchain(),
+      artifacts: stubArtifacts(),
+      toolchain: stubToolchain(),
       mode: WindowsFlavor.release,
       buildRoot: p.join(tempDir.path, 'app', 'build', 'win_cross'),
       dartDefines: const [],

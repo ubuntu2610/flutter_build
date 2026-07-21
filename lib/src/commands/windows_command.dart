@@ -64,7 +64,15 @@ class WindowsCommand extends Command<int> {
           help: '默认关闭：产出干净的 GUI 程序，双击打开不弹控制台窗口。\n'
               '用 --debug-console 开启：给 runner 注入调试信息，让引擎日志显示在\n'
               '启动它的 PowerShell/cmd 控制台（无父控制台时会新建一个），\n'
-              '用于排查运行后无窗口/静默退出的问题。');
+              '用于排查运行后无窗口/静默退出的问题。')
+      ..addFlag('incremental',
+          defaultsTo: true,
+          help: 'kernel / AOT 输入未变时跳过重编，加快迭代构建。\n'
+              '用 --no-incremental 强制全量重编。')
+      ..addOption('dll-search-root',
+          help: '预构建 DLL 的广度搜索根目录（默认：项目根的祖父目录，覆盖\n'
+              'libcimbar / paddle_ocr 等兄弟目录）。收窄它可显著加速大型工作区\n'
+              '下的产物组装。');
   }
 
   @override
@@ -129,6 +137,8 @@ class WindowsCommand extends Command<int> {
       treeShakeIcons: argResults?['tree-shake-icons'] == true,
       verbose: log.verbose,
       debugConsole: argResults?['debug-console'] == true,
+      incremental: (argResults?['incremental'] as bool?) ?? true,
+      dllSearchRoot: argResults?['dll-search-root'] as String?,
     );
 
     await BuildPipeline().run(context);

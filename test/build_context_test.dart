@@ -12,61 +12,16 @@
 
 import 'package:flutter_build/src/build/build_context.dart';
 import 'package:flutter_build/src/engine_artifacts.dart';
-import 'package:flutter_build/src/flutter_env.dart';
-import 'package:flutter_build/src/project.dart';
-import 'package:flutter_build/src/toolchain.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-// ─── 用最小 Stub 实现不落盘的 BuildContext 构造 ───
-
-FlutterEnv _stubEnv() => FlutterEnv.forTesting(
-      sdkRoot: '/sdk',
-      flutterVersion: '3.22.0',
-      dartSdkVersion: '3.5.0',
-      engineCommitHash: 'abc123',
-      engineRealm: '',
-      storageBaseUrl: 'https://storage.googleapis.com',
-      dartExecutable: '/sdk/bin/cache/dart-sdk/bin/dart',
-      frontendServerSnapshot:
-          '/sdk/bin/cache/artifacts/engine/linux-x64/frontend_server_aot.dart.snapshot',
-      hostEngineDir: '/sdk/bin/cache/artifacts/engine/linux-x64',
-    );
-
-FlutterProject _stubProject() => FlutterProject.forTesting(
-      root: '/home/user/myapp',
-      appName: 'myapp',
-      entryPoint: '/home/user/myapp/lib/main.dart',
-      windowsDir: '/home/user/myapp/windows',
-      hasWindowsScaffold: true,
-      plugins: [],
-    );
-
-EngineArtifacts _stubArtifacts() => EngineArtifacts(
-      env: _stubEnv(),
-      embedderDir: '/sdk/bin/cache/artifacts/engine/windows-x64',
-      releaseArtifactsDir: '/sdk/bin/cache/artifacts/engine/windows-x64-release',
-      profileArtifactsDir: '/sdk/bin/cache/artifacts/engine/windows-x64-profile',
-      hostEngineDir: '/sdk/bin/cache/artifacts/engine/linux-x64',
-    );
-
-Toolchain _stubToolchain() => Toolchain(
-      llvmMingwRoot: '/opt/llvm-mingw',
-      targetTriple: 'x86_64-w64-mingw32',
-      wineExecutable: '/usr/bin/wine64',
-      cmakeExecutable: '/usr/bin/cmake',
-      ninjaExecutable: '/usr/bin/ninja',
-    );
+import 'support/stubs.dart';
 
 void main() {
   late BuildContext ctx;
 
   setUp(() {
-    ctx = BuildContext(
-      env: _stubEnv(),
-      project: _stubProject(),
-      artifacts: _stubArtifacts(),
-      toolchain: _stubToolchain(),
+    ctx = stubContext(
       mode: WindowsFlavor.release,
       buildRoot: '/home/user/myapp/build/win_cross',
       dartDefines: ['APP_NAME=hello'],
@@ -99,36 +54,44 @@ void main() {
       expect(ctx.finalExe, endsWith('/myapp/myapp.exe'));
     });
 
+    test('outputDir 为 finalExe 所在目录', () {
+      expect(ctx.outputDir, endsWith('/myapp'));
+      expect(ctx.outputDir, p.dirname(ctx.finalExe));
+    });
+
+    test('dataDir 在 outputDir/data', () {
+      expect(ctx.dataDir, endsWith('/myapp/data'));
+    });
+
     test('flutterAssetsDir 在 data/flutter_assets', () {
       expect(ctx.flutterAssetsDir, endsWith('/data/flutter_assets'));
+    });
+
+    test('mingwCompatDir 在 intermediates/mingw_compat', () {
+      expect(ctx.mingwCompatDir, endsWith('/intermediates/mingw_compat'));
     });
   });
 
   group('BuildContext 不同模式', () {
     test('debug 模式路径包含 debug', () {
-      final debugCtx = BuildContext(
-        env: _stubEnv(),
-        project: _stubProject(),
-        artifacts: _stubArtifacts(),
-        toolchain: _stubToolchain(),
-        mode: WindowsFlavor.debug,
-        buildRoot: '/build',
-        dartDefines: <String>[],
-      );
+      final debugCtx = stubContext(mode: WindowsFlavor.debug, buildRoot: '/build');
       expect(debugCtx.modeDir, '/build/debug');
     });
 
     test('profile 模式路径包含 profile', () {
-      final profileCtx = BuildContext(
-        env: _stubEnv(),
-        project: _stubProject(),
-        artifacts: _stubArtifacts(),
-        toolchain: _stubToolchain(),
-        mode: WindowsFlavor.profile,
-        buildRoot: '/build',
-        dartDefines: <String>[],
-      );
+      final profileCtx =
+          stubContext(mode: WindowsFlavor.profile, buildRoot: '/build');
       expect(profileCtx.modeDir, '/build/profile');
+    });
+  });
+
+  group('BuildContext 默认开关', () {
+    test('incremental 默认开启', () {
+      expect(ctx.incremental, isTrue);
+    });
+
+    test('dllSearchRoot 默认为 null（使用祖父目录）', () {
+      expect(ctx.dllSearchRoot, isNull);
     });
   });
 }

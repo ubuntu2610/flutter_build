@@ -3,6 +3,13 @@
 // We deliberately avoid shelling out to `flutter --version` on every call
 // (slow, ~2s cold start): once we've located the SDK root by resolving
 // the `flutter` script on PATH we can read the file layout directly.
+//
+// 【Flutter 版本接缝】本文件集中了对 Flutter 目录布局的版本敏感假设，升级
+// Flutter 时优先检查这里：
+//   - `version` 顶层文件在 ≈3.13+ 被移除（改从 git 计算）——已作可选处理；
+//   - frontend_server 快照在 ≈3.16+ 更名为 `_aot` 且改用 dartaotruntime 运行，
+//     并可能位于 dart-sdk/bin/snapshots/ 下——见 [FlutterEnv.locate] 的候选列表；
+//   - flutter_patched_sdk(_product) 位于 engine/common/ 下——见 [patchedSdkPath]。
 
 import 'dart:io';
 

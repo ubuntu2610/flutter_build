@@ -8,6 +8,11 @@
 // artifact naming has changed several times across releases (per-mode
 // zips, split zips, embedder vs runtime), and re-encoding that policy
 // here would guarantee drift.
+//
+// 【Flutter 版本接缝】对引擎产物目录布局的版本敏感假设集中在 [_resolve] 与
+// [EngineArtifacts] 的 getter 里：debug/JIT 用 windows-x64，release/profile 用
+// windows-x64-release/-profile 的 AOT 引擎；icudtl.dat 在新版共享于 linux-x64。
+// 升级 Flutter 若构建报缺失产物，优先核对这些路径。
 
 import 'dart:io';
 

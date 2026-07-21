@@ -12,6 +12,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../io/fs_utils.dart';
 import '../logger.dart';
 
 /// 修补 `hotkey_manager_windows/windows/hotkey_manager_windows_plugin.cpp`：
@@ -80,7 +81,7 @@ class PluginSourcePatcher {
     // 物化：符号链接 → 真实副本（不修改 pub-cache 原件）。
     final realPath = link.resolveSymbolicLinksSync();
     await link.delete();
-    await _copyTree(realPath, pluginLinkPath);
+    await copyTree(realPath, pluginLinkPath);
 
     final patchedFiles = <String>[];
     for (final entry in patches.entries) {
@@ -94,22 +95,5 @@ class PluginSourcePatcher {
       }
     }
     return patchedFiles;
-  }
-
-  /// 递归复制目录树，不跟随符号链接（与 pipeline.copyTreePreservingLinks
-  /// 逻辑一致，此处独立实现以避免循环依赖）。
-  Future<void> _copyTree(String src, String dst) async {
-    await Directory(dst).create(recursive: true);
-    for (final entity in Directory(src).listSync(followLinks: false)) {
-      final target = p.join(dst, p.basename(entity.path));
-      if (entity is Directory) {
-        await _copyTree(entity.path, target);
-      } else if (entity is File) {
-        await entity.copy(target);
-      } else if (entity is Link) {
-        await Link(target)
-            .create(entity.resolveSymbolicLinksSync(), recursive: true);
-      }
-    }
   }
 }
