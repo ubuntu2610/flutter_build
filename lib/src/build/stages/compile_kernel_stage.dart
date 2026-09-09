@@ -54,6 +54,9 @@ class CompileKernelStage extends BuildStage {
       ...ctx.dartDefines,
       'entry=${ctx.project.entryPoint}',
       'sdkRoot=${ctx.env.sdkRoot}',
+      // SDK 升级后 patched_sdk / frontend_server 都变了，但 depfile 只记录
+      // Dart 源码，增量会误命中——把 engine hash 纳入指纹强制重编。
+      'engineHash=${ctx.env.engineCommitHash}',
       'registrant=$hasRegistrant',
     ]);
     if (ctx.incremental &&

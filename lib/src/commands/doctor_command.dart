@@ -104,7 +104,9 @@ class DoctorCommand extends Command<int> {
       await log.group('Windows engine artifacts', () async {
         try {
           final art = EngineArtifactsProvisioner(env: env!, runner: runner);
-          final a = await art.ensure();
+          final a = await art.ensure(
+            allowDownload: argResults?['allow-download'] == true,
+          );
           log.kv(a.describe());
         } on ToolException catch (e) {
           fail(e.message);

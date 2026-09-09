@@ -161,33 +161,112 @@ class EngineArtifactsProvisioner {
   final Logger _log;
   final ProcessRunner _runner;
 
-  /// Idempotent: skips the Flutter subcall if all expected files are present.
-  Future<EngineArtifacts> ensure() async {
+  /// Idempotent: skips the Flutter subcall if all expected files are present
+  /// **and** provably fresh (see [isStale]).
+  ///
+  /// [allowDownload] 为 false（`--no-precache` / doctor 不带 `--allow-download`）
+  /// 时，缺失或过期直接抛 [ArtifactException]，不触发下载。
+  ///
+  /// [force] 为 true 时跳过新鲜度判断，无条件用 `--force` 重新获取——用于
+  /// AOT 阶段检测到 kernel 格式版本错配后的自动修复。
+  Future<EngineArtifacts> ensure({
+    bool allowDownload = true,
+    bool force = false,
+  }) async {
     final artifacts = _resolve();
+    final missing = !_allPresent(artifacts);
+    final stale = !missing && isStale(artifacts);
 
-    if (_allPresent(artifacts)) {
+    if (!force && !missing && !stale) {
       _log.debug('Windows engine artifacts already present.');
       return artifacts;
     }
 
-    _log.step('flutter precache --windows (populating engine artifacts)');
+    if (!allowDownload) {
+      throw ArtifactException(
+        missing
+            ? 'Windows engine artifacts are missing.'
+            : 'Windows engine artifacts are stale: gen_snapshot.exe predates '
+                'the SDK Dart toolchain — the kernel format mismatch will '
+                'break AOT compilation.',
+        hint: 'Re-run without --no-precache (or with --allow-download), or '
+            'fix manually:\n'
+            '  flutter precache --no-android --no-ios --windows --force',
+      );
+    }
+
+    // stale 时必须 --force：SDK 自动升级（snap 等）后，flutter 的 cache stamp
+    // 可能已被「空更新」污染——Linux 主机上 WindowsEngineArtifacts 的下载列
+    // 表为空，update 后 stamp 照写当前 engine hash——普通 precache 会静默跳过
+    // （2026-09 在 Flutter 3.47.2 + snap 升级场景实测）。
+    await _precache(force: force || stale);
+
+    var current = _resolve();
+    if (_allPresent(current) && !isStale(current)) return current;
+
+    // 兜底：missing 场景下普通 precache 也可能因 stamp 污染静默无效，强刷一次。
+    if (!force && !stale) {
+      await _precache(force: true);
+      current = _resolve();
+      if (_allPresent(current) && !isStale(current)) return current;
+    }
+
+    throw ArtifactException(
+      'Windows engine artifacts still missing or stale after `flutter precache`.\n'
+      '${current.describe().entries.map((e) => '  ${e.key}: ${e.value}').join('\n')}',
+      hint: 'Try upgrading Flutter (`flutter upgrade`) or check network '
+          'access to storage.googleapis.com.',
+    );
+  }
+
+  Future<void> _precache({required bool force}) async {
+    _log.step('flutter precache --windows${force ? ' --force' : ''} '
+        '(populating engine artifacts)');
     await _runner.run(
       p.join(env.sdkRoot, 'bin', 'flutter'),
-      ['precache', '--no-android', '--no-ios', '--windows'],
+      [
+        'precache',
+        '--no-android',
+        '--no-ios',
+        '--windows',
+        if (force) '--force',
+      ],
       stream: true,
       tag: 'flutter',
     );
+  }
 
-    final again = _resolve();
-    if (!_allPresent(again)) {
-      throw ArtifactException(
-        'Windows engine artifacts still missing after `flutter precache`.\n'
-        '${again.describe().entries.map((e) => '  ${e.key}: ${e.value}').join('\n')}',
-        hint: 'Try upgrading Flutter (`flutter upgrade`) or check network '
-            'access to storage.googleapis.com.',
-      );
+  /// Windows 引擎产物是否与当前 SDK 的 Dart 工具链版本错配（stale）。
+  ///
+  /// 【Flutter 版本接缝 · 2026-09 实测】SDK 自动升级（snap / flutter upgrade）
+  /// 只刷新 dart-sdk / frontend_server（kernel 生产者），Windows 引擎产物
+  /// （kernel 消费者 gen_snapshot.exe、flutter_windows.dll）残留旧版；且
+  /// flutter 的 stamp 在 Linux 主机上会被「空更新」污染（见 [ensure]），
+  /// 普通 precache 无法自愈。错配时 AOT 编译失败特征：
+  ///   Can't load Kernel binary: Invalid kernel binary format version
+  ///   (expected 130, found 138).
+  ///
+  /// 判据：产物文件的 mtime 保留自 zip 内时间戳（引擎构建时间）。同一引擎
+  /// 构建的 frontend_server 与 gen_snapshot.exe 时间差在小时级；差值超过
+  /// 7 天说明二者来自不同引擎版本。frontend_server 缺失或无法读取时保守
+  /// 放行（返回 false），不阻塞构建。
+  bool isStale(EngineArtifacts a) {
+    final ref = File(env.frontendServerSnapshot);
+    if (!ref.existsSync()) return false;
+    final refTime = ref.lastModifiedSync();
+    const threshold = Duration(days: 7);
+    for (final path in <String>[
+      a.genSnapshotExe(WindowsFlavor.release),
+      a.genSnapshotExe(WindowsFlavor.profile),
+      a.flutterWindowsDll,
+    ]) {
+      final f = File(path);
+      if (!f.existsSync()) continue; // 缺失由 _allPresent 负责。
+      if (refTime.difference(f.lastModifiedSync()).abs() > threshold) {
+        return true;
+      }
     }
-    return again;
+    return false;
   }
 
   EngineArtifacts _resolve() {

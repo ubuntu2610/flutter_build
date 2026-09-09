@@ -32,10 +32,57 @@ String patchHotkeyManagerPluginCpp(String content) {
   );
 }
 
+/// 修补 `file_selector_windows/windows/file_dialog_controller.h`：
+///
+/// `IFileDialogPtr dialog_ = nullptr;` 在 MinGW-w64 的 comip.h 下二义：
+/// `decltype(nullptr)` 构造被 `_NATIVE_NULLPTR_SUPPORTED` 条件排除后，
+/// nullptr 到 LPSTR / LPWSTR / Interface* 三个指针构造的隐式转换级别完全
+/// 相同，无法选出最优。MSVC 的 comip.h 带该构造，故此写法在 Windows +
+/// MSVC 下正常编译。改为默认构造（`m_pInterface(NULL)`）语义完全一致，
+/// 且在两个编译器下均合法。
+String patchFileDialogControllerH(String content) {
+  return content.replaceAll(
+    'IFileDialogPtr dialog_ = nullptr;',
+    'IFileDialogPtr dialog_;',
+  );
+}
+
+/// 修补 `file_selector_windows/windows/file_selector_plugin.cpp`：
+///
+/// 1. 删除与 `file_dialog_controller.h` 重复的
+///    `_COM_SMARTPTR_TYPEDEF(IFileDialog, IID_IFileDialog);`：MinGW-w64 的
+///    该宏展开含 inline 函数定义（`__IFileDialog_IID_getter`），同一翻译
+///    单元两次定义直接 redefinition；MSVC 的展开只有 typedef，重复调用合
+///    法。头文件已定义过，删除此处重复调用在两个编译器下语义等价。
+/// 2. `IFileDialogPtr dialog = nullptr;` 的二义性同
+///    [patchFileDialogControllerH]，改为默认构造。
+String patchFileSelectorPluginCpp(String content) {
+  var result = content;
+  // CRLF（pub-cache 原件为 CRLF 行尾）优先，LF 兜底以防上游改变行尾。
+  result = result.replaceFirst(
+    '_COM_SMARTPTR_TYPEDEF(IFileDialog, IID_IFileDialog);\r\n',
+    '',
+  );
+  if (result == content) {
+    result = result.replaceFirst(
+      '_COM_SMARTPTR_TYPEDEF(IFileDialog, IID_IFileDialog);\n',
+      '',
+    );
+  }
+  return result.replaceAll(
+    'IFileDialogPtr dialog = nullptr;',
+    'IFileDialogPtr dialog;',
+  );
+}
+
 /// 已知需要源码补丁的插件及其文件级补丁规则。
 const Map<String, Map<String, String Function(String)>> _pluginPatches = {
   'hotkey_manager_windows': {
     'hotkey_manager_windows_plugin.cpp': patchHotkeyManagerPluginCpp,
+  },
+  'file_selector_windows': {
+    'file_dialog_controller.h': patchFileDialogControllerH,
+    'file_selector_plugin.cpp': patchFileSelectorPluginCpp,
   },
 };
 
@@ -46,9 +93,10 @@ class PluginSourcePatcher {
   /// 对 [ephemeralDir]（`flutter/ephemeral/`）下的插件链接应用补丁。
   ///
   /// 需要补丁的插件目录会从符号链接替换为真实副本（不修改 pub-cache 原
-  /// 件），然后对副本做文本补丁。当前 `_pluginPatches` 含 1 条规则
-  /// （hotkey_manager_windows 的 EncodableMap 初始化，见上文说明）；若某项目
-  /// 未依赖该插件，对应链接不存在时会被静默跳过。
+  /// 件），然后对副本做文本补丁。当前 `_pluginPatches` 含 2 条规则
+  /// （hotkey_manager_windows 的 EncodableMap 初始化、file_selector_windows
+  /// 的 COM 智能指针兼容，见上文说明）；若某项目
+  /// 未依赖某插件，对应链接不存在时会被静默跳过。
   Future<void> apply(String ephemeralDir, {Logger? logger}) async {
     if (_pluginPatches.isEmpty) return;
     final log = logger ?? Logger.instance;

@@ -44,7 +44,14 @@ class SourceStagingStage extends BuildStage {
   @override
   Future<void> run(BuildContext ctx) async {
     await Directory(ctx.intermediatesDir).create(recursive: true);
-    await Directory(ctx.windowsStageDir).create(recursive: true);
+    // staging 完全可再生：清掉上次构建（可能中途失败）的残留再重建。否则
+    // copyTree 会在已存在的插件符号链接上撞 EEXIST（errno 17），失败后的
+    // 重跑永远无法通过本阶段。
+    final stageDir = Directory(ctx.windowsStageDir);
+    if (stageDir.existsSync()) {
+      await stageDir.delete(recursive: true);
+    }
+    await stageDir.create(recursive: true);
     await copyTree(ctx.project.windowsDir, ctx.windowsStageDir);
     await _generateFlutterEphemeral(ctx);
     await _patchPluginSources(ctx);

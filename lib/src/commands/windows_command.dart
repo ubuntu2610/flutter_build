@@ -107,7 +107,7 @@ class WindowsCommand extends Command<int> {
     final artifacts = await EngineArtifactsProvisioner(
       env: env,
       runner: runner,
-    ).ensure();
+    ).ensure(allowDownload: allowDownload);
 
     final buildRoot = (argResults?['output-dir'] as String?) ??
         p.join(project.root, 'build', 'win_cross');
