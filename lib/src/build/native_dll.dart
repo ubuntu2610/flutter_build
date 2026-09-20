@@ -28,6 +28,7 @@ const Set<String> kDllSearchSkipDirs = {
   '.pub-cache',
   '.git',
   '.flutter_build',
+  '.cache', // OpenCV 等的下载缓存（如 .cache/ffmpeg/<md5>-<name>.dll），非预构建产物。
   'snap',
   'proc',
   'sys',

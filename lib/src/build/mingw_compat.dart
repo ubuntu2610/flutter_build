@@ -32,6 +32,35 @@ const Map<String, String> kMingwCompatHeaders = {
       '#define _FLUTTER_BUILD_WINDOWS_H_SHIM\n'
       '#include <windows.h>\n'
       '#endif\n',
+  // 同上：Windows SDK 头文件为 VersionHelpers.h（大写 V/H），
+  // MinGW-w64 提供的是小写 versionhelpers.h（含 IsWindows7/8/10OrGreater）。
+  'VersionHelpers.h': '// flutter_build MinGW compatibility shim\n'
+      '// On case-sensitive filesystems <VersionHelpers.h> is not found because\n'
+      '// MinGW-w64 ships the header as <versionhelpers.h> (lowercase).\n'
+      '#ifndef _FLUTTER_BUILD_VERSIONHELPERS_H_SHIM\n'
+      '#define _FLUTTER_BUILD_VERSIONHELPERS_H_SHIM\n'
+      '#include <versionhelpers.h>\n'
+      '#endif\n',
+  // MSVC SAL2 注解（VS2015+）：MinGW-w64 的 sal.h 没有（如 onnxruntime 的
+  // onnxruntime_c_api.h 经 <specstrings.h> → <sal.h> 使用 _Frees_ptr_opt_，
+  // 编译报 "unknown type name '_Frees_ptr_opt_'"）。垫片先 include_next 放行
+  // 系统 sal.h（clang/gcc 支持 include_next；MSVC 不会见到本垫片），再补齐
+  // 缺失注解——SAL 注解对编译无语义，空展开即可。仅定义 MinGW sal.h 确实
+  // 缺失的宏（#ifndef 双保险，避免与未来版本的系统头重定义冲突）。
+  'sal.h': '// flutter_build MinGW compatibility shim\n'
+      '// MinGW-w64 sal.h lacks the SAL2 pointer-lifetime annotations used by\n'
+      '// some vendored Windows SDK-style headers (e.g. onnxruntime_c_api.h).\n'
+      '// Defer to the real sal.h, then define the missing annotations as no-ops.\n'
+      '#ifndef _FLUTTER_BUILD_SAL_SHIM\n'
+      '#define _FLUTTER_BUILD_SAL_SHIM\n'
+      '#include_next <sal.h>\n'
+      '#ifndef _Frees_ptr_\n'
+      '#define _Frees_ptr_\n'
+      '#endif\n'
+      '#ifndef _Frees_ptr_opt_\n'
+      '#define _Frees_ptr_opt_\n'
+      '#endif\n'
+      '#endif\n',
 };
 
 /// 在 [outDir] 下生成 MinGW 兼容垫片头文件，返回 [outDir]。

@@ -196,4 +196,47 @@ endfunction()
       expect(warnings, isEmpty);
     });
   });
+
+  group('多行 target_compile_options 调用', () {
+    // 复刻 screenshot/windows/CMakeLists.txt 中 pp_ocr 插件的写法：
+    // 旗标各占一行（续行不含关键字），此前会整块漏译直接透传给 clang。
+    const input = '''
+if(TARGET pp_ocr_plugin)
+  target_compile_options(pp_ocr_plugin PRIVATE
+    /WX-          # don't treat warnings as errors in third-party code
+    /utf-8        # interpret source files as UTF-8 (fixes C4819)
+    /wd4127       # suppress C4127 from OpenCV headers
+  )
+endif()
+''';
+
+    test('续行中的 /WX- /utf-8 /wd4127 被翻译/移除', () async {
+      final warnings = <String>[];
+      final out = await translate(input);
+      expect(out, contains('-Wno-error'));
+      expect(out, contains('-finput-charset=UTF-8'));
+      expect(out, isNot(contains('/WX-')));
+      expect(out, isNot(contains('/utf-8')));
+      expect(out, isNot(contains('/wd4127')));
+      expect(warnings, isEmpty);
+    });
+
+    test('跨行的 /wd"NNNN" 引号写法也被移除', () async {
+      final out = await translate(
+        'target_compile_options(x PRIVATE\n'
+        '    /W4 /WX\n'
+        '    /wd"4100"\n'
+        ')',
+      );
+      expect(out, contains('-Wall -Wextra'));
+      expect(out, contains('-Werror'));
+      expect(out, isNot(contains('/wd')));
+    });
+
+    test('多行调用结束后恢复普通行处理（不误伤后续内容）', () async {
+      const after = 'install(FILES "/path/with/c/UTF-8.txt" DESTINATION bin)';
+      final out = await translate('$input$after\n');
+      expect(out, contains(after));
+    });
+  });
 }

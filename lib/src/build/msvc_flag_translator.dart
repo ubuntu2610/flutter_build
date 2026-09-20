@@ -116,6 +116,9 @@ class MsvcFlagTranslator {
     '/W3': '-Wall',
     '/W4': '-Wall -Wextra',
     '/WX': '-Werror',
+    // /WX-：关闭"警告即错误"（MSVC 用 `-` 后缀取消 /WX），clang 等价物为
+    // -Wno-error。注意边界正则保证 /WX 不会误配到 /WX-（`-` 在排除集内）。
+    '/WX-': '-Wno-error',
     '/permissive-': '',
     '/Zc:__cplusplus': '',
     '/Zc:preprocessor': '',
@@ -146,14 +149,19 @@ class MsvcFlagTranslator {
     );
   }
 
-  /// 按行翻译 MSVC 标志（仅处理形似“标志行”的行，避免误伤路径/注释）。被
-  /// [_guardBegin]/[_guardEnd] 包裹的行会被整体跳过。
+  /// 按行翻译 MSVC 标志。除含关键字的单行外，还支持**多行调用**：进入
+  /// `target_compile_options(` / `add_compile_options(` / `add_definitions(`
+  /// 等调用的未闭合括号区后，其续行同样按旗标行处理（应用层 CMakeLists 常把
+  /// 旗标拆成多行书写，如 `target_compile_options(x PRIVATE\n /WX- ...)`）。
+  /// 被 [_guardBegin]/[_guardEnd] 包裹的行会被整体跳过。
   String _translateFlags(
     String content, {
     List<String>? warnings,
     String? sourcePath,
   }) {
     var inGuard = false;
+    // 多行旗标调用的未闭合括号深度（0 = 当前不在调用内）。
+    var callDepth = 0;
     return content.split('\n').map((line) {
       if (line.contains(_guardBegin)) {
         inGuard = true;
@@ -164,12 +172,21 @@ class MsvcFlagTranslator {
         return line;
       }
       if (inGuard) return line;
-      if (!_looksLikeFlagsLine(line)) return line;
+      if (callDepth <= 0 && !_looksLikeFlagsLine(line)) return line;
+
+      // 维护多行调用的括号深度（按去掉注释后的文本统计）。
+      final code = _stripCmakeComment(line);
+      callDepth += '('.allMatches(code).length - ')'.allMatches(code).length;
+      if (callDepth < 0) callDepth = 0;
 
       var out = line;
       _flagMap.forEach((msvc, gcc) {
         out = out.replaceAll(_boundaryRegExp(msvc), gcc);
       });
+      // /wdNNNN（MSVC 按编号抑制告警，含 /wd"NNNN" 与整段带引号写法）在
+      // clang 里没有等价物，且原样透传会被 clang 当作输入文件报
+      // "no such file or directory"，这里直接移除。
+      out = out.replaceAll(_wdFlagRegExp, '');
 
       if (warnings != null) {
         final leftover = _detectUnknownFlags(out);
@@ -180,6 +197,15 @@ class MsvcFlagTranslator {
       }
       return out;
     }).join('\n');
+  }
+
+  // /wdNNNN 的三种写法：/wd4127、/wd"4127"、"/wd4127"。
+  static final RegExp _wdFlagRegExp = RegExp(r'"?/wd\d+"?|/wd"\d+"');
+
+  /// 去掉行内 CMake 注释（`#` 到行尾），用于括号统计。
+  static String _stripCmakeComment(String line) {
+    final idx = line.indexOf('#');
+    return idx < 0 ? line : line.substring(0, idx);
   }
 
   /// 在已翻译的一行里找出仍残留的 `/X` 风格 token。路径片段（后紧跟 `/`，如

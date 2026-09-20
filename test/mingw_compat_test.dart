@@ -23,6 +23,33 @@ void main() {
     }
   });
 
+  test('VersionHelpers.h 垫片转发到小写 versionhelpers.h', () async {
+    final out = p.join(tmp.path, 'compat');
+    await materializeMingwCompat(
+        outDir: out, mingwLibDir: p.join(tmp.path, 'nolib'));
+
+    final f = File(p.join(out, 'VersionHelpers.h'));
+    expect(f.existsSync(), isTrue);
+    final content = f.readAsStringSync();
+    // 转发目标是小写系统头（避免与垫片自身形成递归包含）。
+    expect(content, contains('#include <versionhelpers.h>'));
+    expect(content, isNot(contains('#include <VersionHelpers.h>')));
+  });
+
+  test('sal.h 垫片经 include_next 放行系统头并补齐 SAL2 注解', () async {
+    final out = p.join(tmp.path, 'compat');
+    await materializeMingwCompat(
+        outDir: out, mingwLibDir: p.join(tmp.path, 'nolib'));
+
+    final content = File(p.join(out, 'sal.h')).readAsStringSync();
+    // 放行系统 sal.h（include_next 不会递归回垫片自身）。
+    expect(content, contains('#include_next <sal.h>'));
+    expect(RegExp(r'#include\s+<sal\.h>').hasMatch(content), isFalse);
+    // 补齐 MinGW sal.h 缺失的 MSVC SAL2 注解（空展开 + #ifndef 防重定义）。
+    expect(content, contains('#define _Frees_ptr_opt_'));
+    expect(content, contains('#define _Frees_ptr_'));
+  });
+
   test('幂等：内容未变时不重写（保持 mtime，避免触发 ninja 全量重编）', () async {
     final out = p.join(tmp.path, 'compat');
     final libDir = p.join(tmp.path, 'nolib');
