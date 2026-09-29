@@ -70,9 +70,9 @@ flutter_build precache
 **B. 手动下载（网络快 / 代理 / 镜像 / U 盘）**
 
 ```bash
-wget https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-tar -xJf llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz -C ~/
-export LLVM_MINGW_ROOT=~/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64
+wget https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64.tar.xz
+tar -xJf llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64.tar.xz -C ~/
+export LLVM_MINGW_ROOT=~/llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
 # 持久化：将上面这行 export 追加到 ~/.bashrc。
 ```
 

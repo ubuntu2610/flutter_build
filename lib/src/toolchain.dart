@@ -71,11 +71,12 @@ class LlvmMingwRelease {
   ///
   /// llvm-mingw 不为每个 Ubuntu 版本单独发包，而是每个 release 只有一个
   /// Linux 构建，其 tag 随 release 变化（例如 20240619 用 ubuntu-20.04，
-  /// 20260616 用 ubuntu-22.04）。升级 [defaultLlvmMingw] 的 version 时，
-  /// 在此登记对应 tag 即可。
+  /// 20260616/20260922 用 ubuntu-22.04）。升级 [defaultLlvmMingw] 的
+  /// version 时，在此登记对应 tag 即可。
   static const Map<String, String> _linuxTagByVersion = {
     '20240619': 'ubuntu-20.04',
     '20260616': 'ubuntu-22.04',
+    '20260922': 'ubuntu-22.04',
   };
 
   /// 未登记版本的后备 tag。选用已知最老的构建以最大化 glibc 向前兼容性。
@@ -87,7 +88,7 @@ class LlvmMingwRelease {
 
   /// 以指定版本构造 release，自动解析匹配的 Linux distro tag。
   factory LlvmMingwRelease.pinned({
-    String version = '20240619',
+    String version = '20260922',
     String crt = 'ucrt',
     String? sha256,
   }) =>
@@ -108,9 +109,11 @@ class LlvmMingwRelease {
 /// `linuxDistroTag` 不再硬编码，而是由 [LlvmMingwRelease.linuxTagForVersion]
 /// 按 version 自动解析。
 final LlvmMingwRelease defaultLlvmMingw = LlvmMingwRelease.pinned(
-  version: '20240619',
+  version: '20260922',
   crt: 'ucrt',
-  // sha256: 'fill-in-once-verified',
+  // LLVM 23.1.2 的 ucrt-ubuntu-22.04 构建，sha256 来自官方 Release 资产。
+  sha256:
+      'bb7bb7654b33d5aa8712acb837c963b2e0c56352560c76105270a3268c665c21',
 );
 
 /// Resolved paths to the tools we drive during a cross-build.

@@ -61,6 +61,25 @@ const Map<String, String> kMingwCompatHeaders = {
       '#define _Frees_ptr_opt_\n'
       '#endif\n'
       '#endif\n',
+  // LLVM 23+ 的 libc++ 重构了头文件分层：<codecvt> 不再传递提供 <locale>
+  // 的 std::wstring_convert（旧版经传递包含可见），按旧布局编写的插件
+  // （window_manager 的 UTF-8/UTF-16 转换）在 include <codecvt> 后仍报
+  // "no template named 'wstring_convert' in namespace 'std'"。include_next
+  // 放行真头后补 <locale>，恢复旧的传递包含语义。MSVC STL 无此重构（真实
+  // Windows 构建不受影响；垫片只在交叉构建时经 -I 注入，MSVC 见不到）。
+  'codecvt': '// flutter_build MinGW compatibility shim\n'
+      '// LLVM 23+ libc++ stopped transitively exposing <locale>\n'
+      '// std::wstring_convert from <codecvt>. Plugins written against\n'
+      '// the old include layout (e.g. window_manager) fail with a\n'
+      '// missing wstring_convert error. Defer to the real <codecvt>,\n'
+      '// then re-expose <locale> to restore the old transitive include\n'
+      '// semantics. MSVC STL has no such refactor (a real Windows build\n'
+      '// is unaffected; MSVC never sees this shim).\n'
+      '#ifndef _FLUTTER_BUILD_CODECVT_SHIM\n'
+      '#define _FLUTTER_BUILD_CODECVT_SHIM\n'
+      '#include_next <codecvt>\n'
+      '#include <locale>\n'
+      '#endif\n',
 };
 
 /// 在 [outDir] 下生成 MinGW 兼容垫片头文件，返回 [outDir]。

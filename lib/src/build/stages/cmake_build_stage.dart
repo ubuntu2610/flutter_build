@@ -96,13 +96,22 @@ class CMakeBuildStage extends BuildStage {
       //     并将 extra-qualification 从硬错误降级为 ExtWarn（-fms-compatibility
       //     会破坏 MinGW-w64 标准库头文件，不可用）。-fms-extensions 下该警告
       //     的诊断组名为 microsoft-extra-qualification（非 extra-qualification）。
+      //   -include <hdr> — LLVM 23+ 的 libc++ 收紧了标准库头的传递包含
+      //     （如 <algorithm> 不再带 <iterator>、若干头不再带 <cmath>），老
+      //     插件普遍依赖旧的传递可见性：screen_retriever 用 round 没 include
+      //     <cmath>、flutter wrapper 用 std::back_inserter 没 include
+      //     <iterator>。对每个 TU 预注入常用标准头恢复旧可见性。MSVC STL
+      //     未收紧传递包含（真实 Windows 构建不受影响），MSVC 也见不到这些
+      //     标志。后续遇到新的缺头再按需追加。
       '-DCMAKE_CXX_FLAGS=-I $compatDir '
           '-Wno-pragma-once-outside-header -Wno-deprecated-declarations '
           '-fms-extensions '
           '-Wno-error=unknown-pragmas '
           '-Wno-error=unused-const-variable '
           '-Wno-error=unused-local-typedef '
-          '-Wno-error=microsoft-extra-qualification',
+          '-Wno-error=microsoft-extra-qualification '
+          '-include cmath -include iterator -include algorithm '
+          '-include cstdint -include cstring -include cstdio',
     ];
     // 用净化过的环境驱动 CMake：剥离宿主（如 Flutter snap）注入的
     // CFLAGS/CXXFLAGS/LDFLAGS 等，否则 -lepoxy/-lfontconfig 等 Linux 库会
