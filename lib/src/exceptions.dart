@@ -26,10 +26,9 @@ class ToolException implements Exception {
 
 /// A required external program (cmake, ninja, wine, ...) could not be found.
 class MissingToolException extends ToolException {
-  MissingToolException(String toolName, {String? hint})
+  MissingToolException(String toolName, {super.hint})
       : super(
           'Required tool not found on PATH: $toolName',
-          hint: hint,
           exitCode: 2,
         );
 }
