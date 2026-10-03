@@ -51,9 +51,18 @@ void main() {
       expect(_names(dart.stages), <String>['kernel', 'aot']);
     });
 
-    test('资源轨独立成一条并发 lane（copy_flutter_bundle 与两轨并行）', () {
+    test('资源轨独立成一条并发 lane，但门控在 kernel 之后（保守）', () {
       final assets = schedule.concurrent.firstWhere((l) => l.label == 'assets');
       expect(_names(assets.stages), <String>['assets']);
+      // 避开两个 host Dart 进程（flutter assemble vs frontend_server）同时跑。
+      expect(assets.gateOnStageName, 'kernel');
+    });
+
+    test('native / dart lane 无门控，启动即并行', () {
+      for (final label in <String>['native', 'dart']) {
+        final lane = schedule.concurrent.firstWhere((l) => l.label == label);
+        expect(lane.gateOnStageName, isNull);
+      }
     });
 
     test('组装阶段是唯一串行汇合 lane', () {
@@ -88,6 +97,12 @@ void main() {
     test('资源打包排在 CMake 之后、组装之前', () {
       final labels = schedule.serial.map((l) => l.label).toList();
       expect(labels, <String>['native', 'dart', 'native', 'assets', 'join']);
+    });
+
+    test('串行模式下无 lane 需门控（依次执行天然隔开 Dart 进程）', () {
+      for (final lane in schedule.serial) {
+        expect(lane.gateOnStageName, isNull);
+      }
     });
   });
 

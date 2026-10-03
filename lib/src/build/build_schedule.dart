@@ -3,24 +3,36 @@
 // 依赖关系（面向 Windows 目标）：
 //   原生轨  暂存 → 翻译标志 → CMake 构建   （读 windows/，产出 exe / 插件 DLL）
 //   Dart 轨 kernel 编译 → AOT 编译          （读 Dart 源码，产出 app.dill / app.so）
-//   资源轨  copy_flutter_bundle             （纯 host Dart，独立于上面两轨）
+//   资源轨  copy_flutter_bundle             （纯 host Dart；见下“保守门控”）
 //   汇合    组装 bundle                       （依赖前三轨全部产物）
 //
-// 三条前置 lane 文件集互不重叠，可并行；组装阶段依赖三者，必须在它们全部完成后
-// 串行执行。把调度决策从 [BuildPipeline] 的执行逻辑里抽成纯函数，便于脱离真实
-// 构建单测分组与顺序。
+// 三条前置 lane 产物文件集互不重叠，可并行；组装阶段依赖三者，必须在它们全部
+// 完成后串行执行。
+//
+// 保守门控：资源轨的 `flutter assemble` 与 Dart 轨的 frontend_server 同为 host
+// Dart 编译，可能对工程 `.dart_tool/` 有隐性争用。故资源轨通过 [StageLane.gateOnStageName]
+// 声明“等 kernel 完成后再启动”：既避开两个 Dart 进程同时跑，又能与原生轨 CMake、
+// Dart 轨 AOT 并行。kernel 失败时其门控仍会被放行（见 BuildPipeline 的 finally），
+// 不会导致资源轨永久挂起。
+//
+// 把调度决策从 [BuildPipeline] 的执行逻辑里抽成纯函数，便于脱离真实构建单测
+// 分组、顺序与门控关系。
 
 import 'stages/build_stage.dart';
 
-/// 一条 lane：人类可读标签 + 按序执行的阶段序列。
+/// 一条 lane：人类可读标签 + 按序执行的阶段序列（可带一个启动门控）。
 class StageLane {
-  const StageLane(this.label, this.stages);
+  const StageLane(this.label, this.stages, {this.gateOnStageName});
 
   /// lane 标签，用于日志分组前缀（`native` / `dart` / `assets` / `join`）。
   final String label;
 
   /// 本 lane 内按序执行的阶段（同一 lane 内串行）。
   final List<BuildStage> stages;
+
+  /// 若设置，本 lane 在跑自己阶段之前先等待**其它 lane** 里同名阶段完成。
+  /// 用于表达跨 lane 的软依赖（如资源轨等 kernel），同时仍与其它 lane 并行。
+  final String? gateOnStageName;
 }
 
 /// 一次流水线的调度计划。
@@ -64,9 +76,13 @@ BuildSchedule planSchedule(
   if (parallel) {
     return BuildSchedule(
       concurrent: <StageLane>[
-        StageLane('native', [stages[stagingIdx], stages[translateIdx], stages[cmakeIdx]]),
+        StageLane('native',
+            [stages[stagingIdx], stages[translateIdx], stages[cmakeIdx]]),
         StageLane('dart', [stages[kernelIdx], stages[aotIdx]]),
-        StageLane('assets', [stages[assetsIdx]]),
+        // 保守门控：资源轨等 kernel 完成再启动（避开两个 host Dart 进程争用
+        // .dart_tool），启动后仍与 AOT、原生轨 CMake 并行。
+        StageLane('assets', [stages[assetsIdx]],
+            gateOnStageName: stages[kernelIdx].name),
       ],
       serial: <StageLane>[
         StageLane('join', [stages[assembleIdx]]),

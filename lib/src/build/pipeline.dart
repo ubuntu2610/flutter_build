@@ -8,6 +8,7 @@
 // 便于单独理解与测试。流水线结束时打印每阶段耗时与总用时（含并行相对串行的
 // 节省），便于定位编译瓶颈。
 
+import 'dart:async';
 import 'dart:io';
 
 import '../io/fs_utils.dart';
@@ -86,19 +87,32 @@ class BuildPipeline {
         .materialize();
 
     final schedule = planSchedule(_stages(), parallel: ctx.parallel);
+
+    // 为每个阶段建一个 Completer（按阶段名）。带 [StageLane.gateOnStageName] 的
+    // lane 在启动前 await 前驱阶段的 Completer；前驱阶段结束时（无论成功/跳过/
+    // 失败）在 finally 里 complete，避免前驱失败导致下游 gate 永久挂起。
+    final gates = <String, Completer<void>>{};
+    for (final lane in <StageLane>[
+      ...schedule.concurrent,
+      ...schedule.serial,
+    ]) {
+      for (final stage in lane.stages) {
+        gates.putIfAbsent(stage.name, () => Completer<void>());
+      }
+    }
+
     final timings = <StageTiming>[];
     final wall = Stopwatch()..start();
 
     if (schedule.concurrent.isNotEmpty) {
       // 多 lane 并行。Future.wait 默认 eagerError=false：等所有 lane 收尾后
-      // 再报首个错误，不会留下半死的子进程。
-      await Future.wait<void>(schedule.concurrent.map(
-        (lane) => _runLane(lane.label, lane.stages, ctx, timings),
-      ));
+      // 再报首个错误，不会留下半死的子进程。资源轨会先等 kernel（gate）。
+      await Future.wait<void>(schedule.concurrent
+          .map((lane) => _runLane(lane, ctx, timings, gates)));
     }
     // 汇合阶段（组装）依赖并行组的全部产物，在所有并行 lane 完成后依序串行。
     for (final lane in schedule.serial) {
-      await _runLane(lane.label, lane.stages, ctx, timings);
+      await _runLane(lane, ctx, timings, gates);
     }
 
     wall.stop();
@@ -106,20 +120,33 @@ class BuildPipeline {
     _reportTimings(timings, wall.elapsed, ctx.parallel);
   }
 
-  /// 顺序运行一条 lane 内的阶段：过滤 `shouldRun`，逐个执行并记录耗时。
+  /// 运行一条 lane：先等其门控阶段（如有），再按序跑本 lane 阶段（过滤
+  /// `shouldRun`），逐个记录耗时。每个阶段结束后都释放以其为门的 gate。
   Future<void> _runLane(
-    String lane,
-    List<BuildStage> stages,
+    StageLane lane,
     BuildContext ctx,
     List<StageTiming> timings,
+    Map<String, Completer<void>> gates,
   ) async {
-    for (final stage in stages) {
-      if (!stage.shouldRun(ctx)) continue;
+    final gateName = lane.gateOnStageName;
+    if (gateName != null) {
+      await gates[gateName]?.future;
+    }
+    for (final stage in lane.stages) {
       final sw = Stopwatch()..start();
-      await _log.group('[$lane] ${stage.name}', () => stage.run(ctx));
-      sw.stop();
-      timings.add(
-          StageTiming(lane: lane, name: stage.name, elapsed: sw.elapsed));
+      try {
+        if (stage.shouldRun(ctx)) {
+          await _log.group('[${lane.label}] ${stage.name}',
+              () => stage.run(ctx));
+          sw.stop();
+          timings.add(StageTiming(
+              lane: lane.label, name: stage.name, elapsed: sw.elapsed));
+        }
+      } finally {
+        // 无论成功 / 跳过 / 失败，都放行依赖本阶段的 gated lane。
+        final gate = gates[stage.name];
+        if (gate != null && !gate.isCompleted) gate.complete();
+      }
     }
   }
 
