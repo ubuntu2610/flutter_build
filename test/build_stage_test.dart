@@ -7,6 +7,7 @@ import 'package:flutter_build/src/build/stages/assemble_bundle_stage.dart';
 import 'package:flutter_build/src/build/stages/build_stage.dart';
 import 'package:flutter_build/src/build/stages/cmake_build_stage.dart';
 import 'package:flutter_build/src/build/stages/compile_kernel_stage.dart';
+import 'package:flutter_build/src/build/stages/flutter_assets_stage.dart';
 import 'package:flutter_build/src/build/stages/source_staging_stage.dart';
 import 'package:flutter_build/src/build/stages/translate_flags_stage.dart';
 import 'package:flutter_build/src/engine_artifacts.dart';
@@ -35,6 +36,7 @@ void main() {
       TranslateFlagsStage(),
       CompileKernelStage(),
       CMakeBuildStage(),
+      FlutterAssetsStage(),
       AssembleBundleStage(),
     ];
     for (final mode in WindowsFlavor.values) {
@@ -52,6 +54,7 @@ void main() {
     expect(CompileKernelStage().name, 'compile Dart kernel');
     expect(AotCompileStage().name, 'AOT compile');
     expect(CMakeBuildStage().name, 'configure & build with CMake');
+    expect(FlutterAssetsStage().name, 'bundle Flutter assets');
     expect(AssembleBundleStage().name, 'assemble Windows bundle');
   });
 }

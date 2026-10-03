@@ -85,8 +85,8 @@ class AssembleBundleStage extends BuildStage {
       await File(ctx.appAotElf).copy(p.join(dataDir, 'app.so'));
     }
 
-    // flutter_assets（AssetManifest / 字体 / NOTICES / shaders 等）。
-    await _bundleFlutterAssets(ctx);
+    // flutter_assets 由并行的 FlutterAssetsStage（copy_flutter_bundle）先行生成，
+    // 本阶段作为汇合点运行时它已完成，直接纳入下面的空目录校验。
 
     // 安全网：生成后仍为空说明资源打包异常，明确告警。
     final assetsEmpty = Directory(ctx.flutterAssetsDir).listSync().isEmpty;
@@ -139,38 +139,5 @@ class AssembleBundleStage extends BuildStage {
       }
     }
     return candidates.isNotEmpty ? candidates.first : null;
-  }
-
-  /// 生成 flutter_assets（AssetManifest / 字体 / NOTICES / shaders 等）。
-  ///
-  /// 复用 flutter 自己的资源打包逻辑：`flutter assemble copy_flutter_bundle`。
-  /// 该 target 只依赖 KernelSnapshot（不触发 gen_snapshot / 无需 Windows 二进制），
-  /// 因此能在 Linux 上产出 flutter_assets，直接输出到 data/flutter_assets/。
-  /// release/profile 不含 kernel_blob（用 app.so）；debug 会带 kernel_blob 及快照。
-  Future<void> _bundleFlutterAssets(BuildContext ctx) async {
-    log.info('  生成 flutter_assets（flutter assemble copy_flutter_bundle）…');
-    // flutter assemble 在面向 windows-x64 时会读取 PROGRAMFILES(X86) 来探测
-    // Visual Studio 路径。Linux 上该变量不存在，导致 dart_build target 直接
-    // 报错退出。设为空字符串即可绕过探测——copy_flutter_bundle 只需 Dart 产物
-    // （kernel / AOT），不需要 MSVC。includeParentEnvironment 默认 true，此
-    // map 仅追加一个变量，不覆盖宿主 PATH 等。
-    final env = <String, String>{
-      'PROGRAMFILES(X86)': '',
-    };
-    await runner.run(
-      p.join(ctx.env.sdkRoot, 'bin', 'flutter'),
-      <String>[
-        'assemble',
-        '-dTargetPlatform=windows-x64',
-        '-dBuildMode=${ctx.mode.cliName}',
-        '-dTreeShakeIcons=${ctx.treeShakeIcons}',
-        '--output=${ctx.flutterAssetsDir}',
-        'copy_flutter_bundle',
-      ],
-      workingDirectory: ctx.project.root,
-      environment: env,
-      stream: true,
-      tag: 'assemble',
-    );
   }
 }
