@@ -26,7 +26,16 @@ SUBTITLE = "在 Linux 上交叉编译 Flutter Windows 桌面应用"
 AUTHOR = "LLVM-MinGW + Wine 全开源工具链深度剖析 · 面向学习"
 
 CSS = """
-@page { size: A4; margin: 15mm 14mm 13mm 14mm; }
+@page {
+    size: A4; margin: 15mm 14mm 16mm 14mm;
+    @bottom-center {
+        content: counter(page) " / " counter(pages);
+        margin-top: 4mm;
+        font-family: "Noto Sans CJK SC", "Noto Sans CJK", sans-serif;
+        font-size: 8.5pt; color: #8a97a6;
+    }
+}
+@page :first { @bottom-center { content: none; } }
 * { box-sizing: border-box; }
 html { font-size: 9.6pt; }
 body {

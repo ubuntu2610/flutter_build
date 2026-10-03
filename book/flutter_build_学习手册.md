@@ -2,13 +2,13 @@
 
 > 在 Linux 上交叉编译 Flutter Windows 桌面应用 —— LLVM-MinGW + Wine 全开源工具链深度剖析
 
-| 项目 | 说明 |
-|------|------|
-| 适用版本 | flutter_build `0.1.0-dev` |
+| 项目     | 说明                                              |
+| -------- | ------------------------------------------------- |
+| 适用版本 | flutter_build `0.1.0-dev`                         |
 | 目标平台 | Linux x86_64（推荐 Ubuntu 24.04）→ Windows x86_64 |
-| 语言 | Dart（核心），涉及 C/C++、CMake、Shell |
-| 许可 | Apache-2.0 |
-| 本手册 | 面向学习，系统讲解项目定位、原理、源码实现与运维 |
+| 语言     | Dart（核心），涉及 C/C++、CMake、Shell            |
+| 许可     | Apache-2.0                                        |
+| 本手册   | 面向学习，系统讲解项目定位、原理、源码实现与运维  |
 
 ---
 
@@ -80,14 +80,14 @@ Flutter 官方只能在 **Windows 主机**上用 MSVC + Windows SDK 构建 `flut
 
 `flutter_build` 的答案是：**完全用开源工具链，在 Linux 上交叉编译出与官方字节级兼容的 Windows 桌面应用**。它不改动你的 Flutter 工程源码，只是把"构建"这件事换了一套底层工具：
 
-| 环节 | 官方 Windows 做法 | flutter_build 的 Linux 替代 |
-|------|------------------|----------------------------|
-| C/C++ 编译 | MSVC `cl.exe` | LLVM-MinGW 的 `clang`/`clang++` |
-| 链接 | MSVC `link.exe` | LLD（`ld.lld`） |
-| Windows SDK 头/库 | 微软 SDK | mingw-w64 头与 `.a` 导入库 |
+| 环节              | 官方 Windows 做法           | flutter_build 的 Linux 替代                   |
+| ----------------- | --------------------------- | --------------------------------------------- |
+| C/C++ 编译        | MSVC `cl.exe`               | LLVM-MinGW 的 `clang`/`clang++`               |
+| 链接              | MSVC `link.exe`             | LLD（`ld.lld`）                               |
+| Windows SDK 头/库 | 微软 SDK                    | mingw-w64 头与 `.a` 导入库                    |
 | Dart → 机器码 AOT | `gen_snapshot.exe` 原生运行 | 同一个 `gen_snapshot.exe`，**在 Wine 下运行** |
-| 构建系统 | CMake + Ninja | 同一套 CMake + Ninja |
-| 引擎 DLL | `flutter_windows.dll` | **原样复用官方产物**（不改一个字节） |
+| 构建系统          | CMake + Ninja               | 同一套 CMake + Ninja                          |
+| 引擎 DLL          | `flutter_windows.dll`       | **原样复用官方产物**（不改一个字节）          |
 
 核心思想一句话：**用官方 Windows 引擎产物 + Wine 跑官方 AOT 编译器 + MinGW 编译并链接原生代码**，从而绕过对 MSVC 与 Windows 的依赖。
 
@@ -109,31 +109,17 @@ Flutter 官方只能在 **Windows 主机**上用 MSVC + Windows SDK 构建 `flut
 
 ## 第 2 章 交叉编译的整体架构与五步流水线
 
-一次 `flutter_build windows` 背后是七个**阶段（Stage）**组成的流水线。README 用五步概括其原理，源码里则拆成七个可独立测试的阶段——多出的第 6 阶段（资源打包）独立成轨，以便与 CMake 构建重叠执行。二者对应关系如下：
+一次 `flutter_build windows` 背后是七个**阶段（Stage）**组成的流水线。README 用五步概括其原理，源码里则拆成七个可独立测试的阶段——多出的第 6 阶段（资源打包）独立成轨，以便与 CMake 构建重叠执行。七个阶段按三条并行 lane 分组如下：
 
-```
-┌────────────────────── Linux 主机（三 lane 并行 + 汇合）────────────────┐
-│                                                                       │
-│  原生轨 [lane: native]                                                │
-│    阶段1 暂存    复制 windows/ → 生成 ephemeral/、插件符号链接          │
-│    阶段2 翻译    把 CMakeLists 里的 MSVC 标志翻成 Clang 等价            │
-│    阶段5 CMake   LLVM-MinGW clang/lld 编译链接 runner+插件              │
-│        → <app>.exe   （经 C ABI 链接 flutter_windows.dll）             │
-│                                                                       │
-│  Dart 轨 [lane: dart]                                                 │
-│    阶段3 kernel   frontend_server.dart.snapshot（host Dart VM）        │
-│        → app.dill     （平台无关的 Dart kernel 快照）                   │
-│    阶段4 AOT      Wine + gen_snapshot.exe（Windows PE 二进制）          │
-│        → app.so       （ELF 容器，内含 x86_64 机器码）                  │
-│                                                                       │
-│  资源轨 [lane: assets]                                                │
-│    阶段6 资源     copy_flutter_bundle（门控：等 kernel 完成后再启动）   │
-│        → flutter_assets/   （纯 host Dart，与 AOT、CMake 并行）        │
-│                                                                       │
-│  汇合 [lane: join]                                                    │
-│    阶段7 组装     产物组装成最终可分发包（串行汇合点）                   │
-└───────────────────────────────────────────────────────────────────────┘
-```
+| 轨道 (lane)         | 阶段          | 做什么                                                | 产物                                                  |
+| ------------------- | ------------- | ----------------------------------------------------- | ----------------------------------------------------- |
+| **原生轨** `native` | 阶段 1 暂存   | 复制 `windows/`，生成 `ephemeral/`、插件符号链接      | —                                                     |
+|                     | 阶段 2 翻译   | 把 CMakeLists 里的 MSVC 标志翻成 Clang 等价           | —                                                     |
+|                     | 阶段 5 CMake  | LLVM-MinGW `clang`/`lld` 编译链接 runner + 插件       | `<app>.exe`（经 C ABI 链接 `flutter_windows.dll`）    |
+| **Dart 轨** `dart`  | 阶段 3 kernel | `frontend_server.dart.snapshot`（host Dart VM）       | `app.dill`（平台无关的 Dart kernel 快照）             |
+|                     | 阶段 4 AOT    | Wine + `gen_snapshot.exe`（Windows PE 二进制）        | `app.so`（ELF 容器，内含 x86_64 机器码）              |
+| **资源轨** `assets` | 阶段 6 资源   | `copy_flutter_bundle`（门控：等 kernel 完成后再启动） | `flutter_assets/`（纯 host Dart，与 AOT、CMake 并行） |
+| **汇合** `join`     | 阶段 7 组装   | 产物组装成最终可分发包（串行汇合点）                  | 最终可分发包                                          |
 
 **三 lane 并行**：原生轨（暂存→翻译→CMake）、Dart 轨（kernel→AOT）、资源轨（copy_flutter_bundle）三条 lane 的产物文件集互不重叠，可安全并行。资源轨是纯 host Dart 任务，为避免与 kernel 编译两个 Dart 进程争用工程 `.dart_tool/`，它带一道**跨轨门控**——等 kernel 阶段结束再启动，随后仍与 AOT、CMake 重叠。全部 lane 完成后，串行执行汇合的组装阶段（阶段 7）。调度决策是纯函数（`planSchedule`），可用 `--no-parallel` 回退为原始串行次序；每次构建结束打印逐阶段计时报告，并行模式下还给出相对串行的节省比例（详见第 9 章）。
 
@@ -146,11 +132,11 @@ Flutter 官方只能在 **Windows 主机**上用 MSVC + Windows SDK 构建 `flut
 
 **debug / profile / release 三种模式的差异**（`WindowsFlavor`）：
 
-| 模式 | 是否 AOT | 用哪个引擎 DLL | 是否跑阶段 4 | Dart VM 形态 |
-|------|---------|---------------|-------------|-------------|
-| debug | 否（JIT） | `windows-x64`（JIT 引擎） | 跳过 | 带 kernel_blob，可 hot reload |
-| profile | 是 | `windows-x64-profile` | 运行 | AOT + observatory |
-| release | 是 | `windows-x64-release` | 运行 | AOT，product VM |
+| 模式    | 是否 AOT  | 用哪个引擎 DLL            | 是否跑阶段 4 | Dart VM 形态                  |
+| ------- | --------- | ------------------------- | ------------ | ----------------------------- |
+| debug   | 否（JIT） | `windows-x64`（JIT 引擎） | 跳过         | 带 kernel_blob，可 hot reload |
+| profile | 是        | `windows-x64-profile`     | 运行         | AOT + observatory             |
+| release | 是        | `windows-x64-release`     | 运行         | AOT，product VM               |
 
 流水线里 `AotCompileStage.shouldRun` 直接返回 `ctx.mode.isAot`，因此 debug 构建根本没有阶段 4，阶段总数动态变为 6。
 
@@ -687,16 +673,16 @@ stamp 指纹（增量用）放在**最后重算**，因为重试路径下 gen_sn
 
 ### 配置参数逐项拆解
 
-| 参数 | 作用 |
-|------|------|
-| `-G Ninja` + `CMAKE_MAKE_PROGRAM=ninja` | 用 Ninja 生成器 |
-| `-DCMAKE_SYSTEM_NAME=Windows` `-D..._PROCESSOR=AMD64` | 告知这是面向 Windows 的交叉构建，否则按本机 ELF 处理会套 RPATH 逻辑报错、用错 .exe/.dll 命名规则 |
-| `-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY` | 编译器检测只编译静态库不链接 exe，否则因下面加了 `-municode` 而检测程序只有 `main` 会报 `undefined symbol: wWinMain` |
-| `CMAKE_C/CXX_COMPILER` = clang/clang++ | 交叉编译器 |
-| `CMAKE_RC_COMPILER=llvm-rc` + `CMAKE_RC_FLAGS=-I <sysroot>/include` | 资源编译器无 sysroot，需显式 -I 才找到 winres.h |
-| `CMAKE_EXE_LINKER_FLAGS=-municode -static -ldwmapi -L <compatDir>` | 见下 |
-| `CMAKE_SHARED/MODULE_LINKER_FLAGS=-static ...` | DLL/模块静态链接 |
-| `CMAKE_CXX_FLAGS=-I <compatDir> -Wno-... -fms-extensions -include ...` | 见下 |
+| 参数                                                                   | 作用                                                                                                                 |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `-G Ninja` + `CMAKE_MAKE_PROGRAM=ninja`                                | 用 Ninja 生成器                                                                                                      |
+| `-DCMAKE_SYSTEM_NAME=Windows` `-D..._PROCESSOR=AMD64`                  | 告知这是面向 Windows 的交叉构建，否则按本机 ELF 处理会套 RPATH 逻辑报错、用错 .exe/.dll 命名规则                     |
+| `-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY`                       | 编译器检测只编译静态库不链接 exe，否则因下面加了 `-municode` 而检测程序只有 `main` 会报 `undefined symbol: wWinMain` |
+| `CMAKE_C/CXX_COMPILER` = clang/clang++                                 | 交叉编译器                                                                                                           |
+| `CMAKE_RC_COMPILER=llvm-rc` + `CMAKE_RC_FLAGS=-I <sysroot>/include`    | 资源编译器无 sysroot，需显式 -I 才找到 winres.h                                                                      |
+| `CMAKE_EXE_LINKER_FLAGS=-municode -static -ldwmapi -L <compatDir>`     | 见下                                                                                                                 |
+| `CMAKE_SHARED/MODULE_LINKER_FLAGS=-static ...`                         | DLL/模块静态链接                                                                                                     |
+| `CMAKE_CXX_FLAGS=-I <compatDir> -Wno-... -fms-extensions -include ...` | 见下                                                                                                                 |
 
 **EXE 链接标志四重作用**：① 覆盖宿主（Flutter snap）经 env.sh 注入的 `-lepoxy/-lfontconfig` 等 Linux 库；② `-municode` 选宽字符入口 CRT 匹配 runner 的 `wWinMain`（否则 mingw crtexewin 引窄字符 `WinMain` 报 undefined）；③ `-static` 静态链接 libc++/libunwind 使产物自包含；④ `-ldwmapi` 兜底（部分插件用 MSVC 专属 `#pragma comment(lib,"dwmapi.lib")`），`-L compatDir` 提供 `libGdi32.a→libgdi32.a` 大小写修正软链。
 
@@ -778,13 +764,13 @@ final engineDll = ctx.artifacts.flutterWindowsDllForMode(ctx.mode); // 决策/�
 
 `mingw_compat.dart` 用一张 `kMingwCompatHeaders` 表为 MinGW-w64 缺失的 Windows SDK 头生成**垫片头文件**，写进 `mingwCompatDir` 并由 CMake 的 `-I` 加入搜索路径。典型几例：
 
-| 被引用的头 | 问题 | 垫片做法 |
-|-----------|------|---------|
-| `shobjidl_core.h` | Win10 SDK 拆出的头，MinGW 只有 `shobjidl.h` | `#include <shobjidl.h>` |
-| `Windows.h` | Linux 大小写敏感，MinGW 发的是小写 `windows.h` | `#include <windows.h>` |
-| `VersionHelpers.h` | 同上，MinGW 提供小写 `versionhelpers.h` | `#include <versionhelpers.h>` |
-| `sal.h` | MSVC SAL2 注解（`_Frees_ptr_opt_`）MinGW 没有 | `include_next <sal.h>` 后把注解空展开 |
-| `codecvt` | LLVM 23+ libc++ 不再传递暴露 `std::wstring_convert` | `include_next <codecvt>` 后补 `#include <locale>` |
+| 被引用的头         | 问题                                                | 垫片做法                                          |
+| ------------------ | --------------------------------------------------- | ------------------------------------------------- |
+| `shobjidl_core.h`  | Win10 SDK 拆出的头，MinGW 只有 `shobjidl.h`         | `#include <shobjidl.h>`                           |
+| `Windows.h`        | Linux 大小写敏感，MinGW 发的是小写 `windows.h`      | `#include <windows.h>`                            |
+| `VersionHelpers.h` | 同上，MinGW 提供小写 `versionhelpers.h`             | `#include <versionhelpers.h>`                     |
+| `sal.h`            | MSVC SAL2 注解（`_Frees_ptr_opt_`）MinGW 没有       | `include_next <sal.h>` 后把注解空展开             |
+| `codecvt`          | LLVM 23+ libc++ 不再传递暴露 `std::wstring_convert` | `include_next <codecvt>` 后补 `#include <locale>` |
 
 `include_next` 是 clang/gcc 特性，先放行真系统头再补齐缺失——MSVC 永远见不到这些垫片（只在交叉构建时经 -I 注入），因此不影响真实 Windows 构建。`materializeMingwCompat` 只在内容变化时写入，避免时间戳变化触发 ninja 全量重编。
 
@@ -940,36 +926,36 @@ flutter_build clean [-o path] [--cmake]
 
 **`windows` 标志**：
 
-| 标志 | 用途 |
-|------|------|
-| `--debug` / `--profile` / `--release` | 构建模式（默认 release，三者互斥） |
-| `-D key=value` | Dart `--define`，可重复 |
-| `-t lib/foo.dart` | 入口（默认 lib/main.dart） |
-| `-o path` | 输出根（默认 `<project>/build/win_cross`） |
-| `--obfuscate --split-debug-info=<dir>` | AOT 混淆，必须带 split-debug 目录 |
-| `--no-precache` | 缺工具链/产物时报错而非自动下载 |
-| `--toolchain-path <dir>` | 用预装 LLVM-MinGW（同 `LLVM_MINGW_ROOT`） |
-| `--[no-]tree-shake-icons` | 图标字体 tree-shake（默认开，尚未真正生效） |
-| `--copy` / `--no-copy` | 覆盖 config 的 auto_copy |
-| `--config <path>` | 指定 config.yaml |
-| `--debug-console` | 给 runner 注入日志（排查静默退出） |
-| `--[no-]incremental` | 输入未变时跳过重编（默认开） |
-| `--dll-search-root <dir>` | 预构建 DLL 搜索根（默认祖父目录） |
-| `--[no-]parallel` | 三 lane 并行（原生/Dart/资源，保守门控），默认开 |
+| 标志                                   | 用途                                             |
+| -------------------------------------- | ------------------------------------------------ |
+| `--debug` / `--profile` / `--release`  | 构建模式（默认 release，三者互斥）               |
+| `-D key=value`                         | Dart `--define`，可重复                          |
+| `-t lib/foo.dart`                      | 入口（默认 lib/main.dart）                       |
+| `-o path`                              | 输出根（默认 `<project>/build/win_cross`）       |
+| `--obfuscate --split-debug-info=<dir>` | AOT 混淆，必须带 split-debug 目录                |
+| `--no-precache`                        | 缺工具链/产物时报错而非自动下载                  |
+| `--toolchain-path <dir>`               | 用预装 LLVM-MinGW（同 `LLVM_MINGW_ROOT`）        |
+| `--[no-]tree-shake-icons`              | 图标字体 tree-shake（默认开，尚未真正生效）      |
+| `--copy` / `--no-copy`                 | 覆盖 config 的 auto_copy                         |
+| `--config <path>`                      | 指定 config.yaml                                 |
+| `--debug-console`                      | 给 runner 注入日志（排查静默退出）               |
+| `--[no-]incremental`                   | 输入未变时跳过重编（默认开）                     |
+| `--dll-search-root <dir>`              | 预构建 DLL 搜索根（默认祖父目录）                |
+| `--[no-]parallel`                      | 三 lane 并行（原生/Dart/资源，保守门控），默认开 |
 
 **顶层标志**：`-v/--verbose`、`--no-color`、`--cache-dir <dir>`、`--version`。
 
 ## 附录 B 环境变量速查表
 
-| 变量 | 作用 |
-|------|------|
-| `LLVM_MINGW_ROOT` | 指向预装 LLVM-MinGW 目录（跳下载） |
-| `FLUTTER_BUILD_MIRROR` | llvm-mingw 下载镜像基址 |
-| `FLUTTER_BUILD_CACHE` | 工具缓存根（优先于 `~/.flutter_build`） |
-| `XDG_CACHE_HOME` | 缓存根备选（取 `$XDG_CACHE_HOME/flutter_build`） |
-| `FLUTTER_STORAGE_BASE_URL` | 引擎产物下载基址（被 env 尊重） |
-| `FLUTTER_VERSION` | 无顶层 version 文件时的版本回退值 |
-| `SSHPASS` | 部署密码登录时由 sshpass -e 使用 |
+| 变量                       | 作用                                             |
+| -------------------------- | ------------------------------------------------ |
+| `LLVM_MINGW_ROOT`          | 指向预装 LLVM-MinGW 目录（跳下载）               |
+| `FLUTTER_BUILD_MIRROR`     | llvm-mingw 下载镜像基址                          |
+| `FLUTTER_BUILD_CACHE`      | 工具缓存根（优先于 `~/.flutter_build`）          |
+| `XDG_CACHE_HOME`           | 缓存根备选（取 `$XDG_CACHE_HOME/flutter_build`） |
+| `FLUTTER_STORAGE_BASE_URL` | 引擎产物下载基址（被 env 尊重）                  |
+| `FLUTTER_VERSION`          | 无顶层 version 文件时的版本回退值                |
+| `SSHPASS`                  | 部署密码登录时由 sshpass -e 使用                 |
 
 ## 附录 C 故障排查清单
 
@@ -983,19 +969,19 @@ flutter_build clean [-o path] [--cmake]
 
 ## 附录 D 术语表
 
-| 术语 | 含义 |
-|------|------|
-| AOT / JIT | 提前编译 / 即时编译；release/profile 用 AOT，debug 用 JIT |
-| kernel (`.dill`) | Dart 中间字节码，frontend_server 产出、gen_snapshot 消费 |
-| `app.so` | AOT 机器码快照，以 ELF 容器承载（引擎内置 ELF 加载器） |
-| frontend_server | 把 Dart 源码编译为 kernel 的工具（现代为 AOT 快照，需 dartaotruntime） |
-| gen_snapshot | 把 kernel 编为目标平台 AOT 码的官方工具（本工具经 Wine 跑其 Windows 版） |
-| LLVM-MinGW | clang+lld+mingw-w64 的 Windows 交叉工具链 |
-| Wine | Linux 上的 Windows 兼容层，用于跑 gen_snapshot.exe |
-| embedder | 引擎嵌入层（flutter_windows.dll 及其头/包装） |
-| ephemeral | flutter 构建期生成的临时目录（含嵌入器与插件链接） |
-| stamp | 输入指纹（sha256），用于增量判断 |
-| 版本接缝 | 代码中对 Flutter 目录布局版本敏感假设的集中点 |
+| 术语             | 含义                                                                     |
+| ---------------- | ------------------------------------------------------------------------ |
+| AOT / JIT        | 提前编译 / 即时编译；release/profile 用 AOT，debug 用 JIT                |
+| kernel (`.dill`) | Dart 中间字节码，frontend_server 产出、gen_snapshot 消费                 |
+| `app.so`         | AOT 机器码快照，以 ELF 容器承载（引擎内置 ELF 加载器）                   |
+| frontend_server  | 把 Dart 源码编译为 kernel 的工具（现代为 AOT 快照，需 dartaotruntime）   |
+| gen_snapshot     | 把 kernel 编为目标平台 AOT 码的官方工具（本工具经 Wine 跑其 Windows 版） |
+| LLVM-MinGW       | clang+lld+mingw-w64 的 Windows 交叉工具链                                |
+| Wine             | Linux 上的 Windows 兼容层，用于跑 gen_snapshot.exe                       |
+| embedder         | 引擎嵌入层（flutter_windows.dll 及其头/包装）                            |
+| ephemeral        | flutter 构建期生成的临时目录（含嵌入器与插件链接）                       |
+| stamp            | 输入指纹（sha256），用于增量判断                                         |
+| 版本接缝         | 代码中对 Flutter 目录布局版本敏感假设的集中点                            |
 
 ## 附录 E 源码文件地图
 
