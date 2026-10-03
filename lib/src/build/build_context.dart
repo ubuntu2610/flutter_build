@@ -29,6 +29,7 @@ class BuildContext {
     this.debugConsole = false,
     this.incremental = true,
     this.dllSearchRoot,
+    this.parallel = true,
   });
 
   final FlutterEnv env;
@@ -55,6 +56,10 @@ class BuildContext {
   /// 项目根的祖父目录，覆盖 libcimbar / paddle_ocr 等兄弟目录。收窄它可显著加快
   /// 大型工作区下的产物组装。
   final String? dllSearchRoot;
+
+  /// 是否并行执行两条互不依赖的流水线（原生轨：暂存→翻译→CMake；Dart 轨：
+  /// kernel→AOT），以缩短 wall-clock。由 `--no-parallel` 关闭回退为顺序执行。
+  final bool parallel;
 
   /// `buildRoot/<mode>` — 当前模式的根目录。
   String get modeDir => p.join(buildRoot, mode.cliName);

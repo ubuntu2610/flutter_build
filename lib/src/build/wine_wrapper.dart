@@ -28,6 +28,10 @@ class WineWrapper {
   String get winePrefix => p.join(buildRoot, '.wineprefix');
 
   /// 把包装脚本落盘并标记为可执行。幂等：重复调用只覆盖重写。
+  ///
+  /// 采用「临时文件 + rename」原子落盘：并行流水线里 AOT（gen_snapshot 走 wine）
+  /// 与 CMake 阶段可能各自调用 materialize，直接 writeAsString 存在读到半成品
+  /// 的竞争；rename 是原子操作，读者只会看到旧文件或完整新文件。
   Future<void> materialize() async {
     final dir = Directory(buildRoot);
     if (!dir.existsSync()) {
@@ -40,10 +44,11 @@ class WineWrapper {
         'export WINEDEBUG=-all\n'
         'exec "${toolchain.wineExecutable}" "\$@"\n';
 
-    final file = File(scriptPath);
-    await file.writeAsString(content);
-    // 确保脚本对 owner 可执行（测试会检查 owner exec 位）。
-    Process.runSync('chmod', <String>['+x', scriptPath]);
+    final tmpFile = File('$scriptPath.tmp.${pid}');
+    await tmpFile.writeAsString(content);
+    // owner 可执行位（测试会检查）在 rename 前设好，替换后即为最终权限。
+    Process.runSync('chmod', <String>['+x', tmpFile.path]);
+    await tmpFile.rename(scriptPath);
   }
 
   /// 运行 Wine 包装脚本时应注入的环境变量。

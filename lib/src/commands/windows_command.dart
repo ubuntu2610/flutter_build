@@ -72,7 +72,12 @@ class WindowsCommand extends Command<int> {
       ..addOption('dll-search-root',
           help: '预构建 DLL 的广度搜索根目录（默认：项目根的祖父目录，覆盖\n'
               'libcimbar / paddle_ocr 等兄弟目录）。收窄它可显著加速大型工作区\n'
-              '下的产物组装。');
+              '下的产物组装。')
+      ..addFlag('parallel',
+          defaultsTo: true,
+          help: '并行执行两条互不依赖的流水线（原生轨：暂存→翻译→CMake；\n'
+              'Dart 轨：kernel→AOT）以缩短总用时，产物组装阶段汇合两轨结\n'
+              '果。用小核机器或需隔离排查时，用 --no-parallel 回退为顺序执行。');
   }
 
   @override
@@ -139,6 +144,7 @@ class WindowsCommand extends Command<int> {
       debugConsole: argResults?['debug-console'] == true,
       incremental: (argResults?['incremental'] as bool?) ?? true,
       dllSearchRoot: argResults?['dll-search-root'] as String?,
+      parallel: (argResults?['parallel'] as bool?) ?? true,
     );
 
     await BuildPipeline().run(context);
