@@ -66,7 +66,6 @@
 - 附录 E 源码文件地图
 
 ---
----
 
 # 第一部分 · 概览与原理
 
@@ -187,7 +186,6 @@ String neutralizeFlutterAssemble(String cmakeContent) {
 
 原生轨（暂存→翻译→CMake）、Dart 轨（kernel→AOT）、资源轨（`copy_flutter_bundle`）三条 lane 的产物文件集互不重叠，并行无竞争；唯一的隐性冲突是资源轨的 `flutter assemble` 与 kernel 的 frontend_server 同为 host Dart 进程，可能争用工程 `.dart_tool/`。因此资源轨带一道**保守门控**：等 kernel 阶段结束（无论成功/跳过/失败，均在 `finally` 里放行 Completer）再启动，随后仍与 AOT、CMake 重叠。调度被抽成纯函数 `planSchedule`，可脱离真实构建单测；`--no-parallel` 一键回退串行。详见第 9 章。
 
----
 ---
 
 # 第二部分 · 工具链与环境探测
@@ -382,7 +380,6 @@ Can't load Kernel binary: Invalid kernel binary format version (expected 130, fo
 
 注意区分两套缓存：`CachePaths` 是**工具级**（跨项目共享的工具链），而 `build/win_cross/` 是**项目级**（每次构建的中间与产物）。`clean` 只删后者，前者要手动 `rm -rf ~/.flutter_build`。
 
----
 ---
 
 # 第三部分 · 构建流水线逐阶段精讲
@@ -750,7 +747,6 @@ final engineDll = ctx.artifacts.flutterWindowsDllForMode(ctx.mode); // 决策/�
 最后 `verifyPluginNativeDlls` 编译期校验：插件声明要打包却缺失的 DLL，集中告警并说明缺失原因（"硬编码 Windows 路径"vs"Windows 预编译产物未在 Linux 侧生成"），而非留到运行时。
 
 ---
----
 
 # 第四部分 · 兼容性工程
 
@@ -833,7 +829,6 @@ bool isUpToDate({required outputPath, required inputPaths, stampPath, expectedSt
 默认关闭（产出干净 GUI 程序，双击不弹控制台）；只在排查静默失败时开启。
 
 ---
----
 
 # 第五部分 · CLI、部署与基础设施
 
@@ -910,7 +905,6 @@ remote_dir: C:/flutter_build   # 统一转正斜杠
 
 集中目录/文件复制与体积统计。`copyTree` **不跟随符号链接**并保留链接（解析为真实绝对目标重建），采用有界并发池（`kDefaultCopyConcurrency=8`）：先同步建好目录树并收集文件/链接操作，再并发执行，兼顾吞吐与文件描述符。`copyFileIfExists` 源不存在静默跳过；`dirSize` 递归统计字节数。
 
----
 ---
 
 # 附录
