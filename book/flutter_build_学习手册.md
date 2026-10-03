@@ -14,7 +14,7 @@
 
 ## 如何使用本手册
 
-本手册按"由宏观到微观、由原理到实现"的顺序组织，共五部分二十章加附录，排版目标为 A4 打印约 20 页。建议阅读路径：
+本手册按"由宏观到微观、由原理到实现"的顺序组织，共五部分二十一章加附录，排版目标为 A4 打印约 20 页。建议阅读路径：
 
 - **想快速了解它能做什么**：读第 1、2、3 章（概览与原理）。
 - **想动手用起来**：直接跳第 18、19 章（命令与部署）与附录 A、B、C（速查与排错）。
@@ -30,7 +30,7 @@
 **第一部分 · 概览与原理**
 - 第 1 章 项目定位与要解决的问题
 - 第 2 章 交叉编译的整体架构与五步流水线
-- 第 3 章 六条关键技术决策
+- 第 3 章 七条关键技术决策
 
 **第二部分 · 工具链与环境探测**
 - 第 4 章 Flutter SDK 探测：`FlutterEnv`
@@ -40,13 +40,13 @@
 - 第 8 章 本地缓存布局：`CachePaths`
 
 **第三部分 · 构建流水线逐阶段精讲**
-- 第 9 章 流水线编排与 `BuildContext`
+- 第 9 章 流水线编排、并行调度与 `BuildContext`
 - 第 10 章 阶段 1：源码暂存与 ephemeral 生成
 - 第 11 章 阶段 2：MSVC 编译标志翻译
 - 第 12 章 阶段 3：Dart Kernel 编译
 - 第 13 章 阶段 4：AOT 编译（Wine + gen_snapshot）
 - 第 14 章 阶段 5：CMake 配置与构建
-- 第 15 章 阶段 6：产物组装与原生 DLL 打包
+- 第 15 章 阶段 6 资源打包与阶段 7 产物组装
 
 **第四部分 · 兼容性工程**
 - 第 16 章 MinGW 兼容垫片与插件源码补丁
@@ -109,26 +109,33 @@ Flutter 官方只能在 **Windows 主机**上用 MSVC + Windows SDK 构建 `flut
 
 ## 第 2 章 交叉编译的整体架构与五步流水线
 
-一次 `flutter_build windows` 背后是六个**阶段（Stage）**串成的流水线。README 用五步概括其原理，源码里则拆成六个可独立测试的阶段。二者对应关系如下：
+一次 `flutter_build windows` 背后是七个**阶段（Stage）**组成的流水线。README 用五步概括其原理，源码里则拆成七个可独立测试的阶段——多出的第 6 阶段（资源打包）独立成轨，以便与 CMake 构建重叠执行。二者对应关系如下：
 
 ```
-┌───────────────────────────── Linux 主机 ─────────────────────────────┐
+┌────────────────────── Linux 主机（三 lane 并行 + 汇合）────────────────┐
 │                                                                       │
-│  阶段1 stage sources    复制 windows/ → 生成 ephemeral/、插件符号链接   │
-│  阶段2 translate flags  把 CMakeLists 里的 MSVC 标志翻成 Clang 等价     │
+│  原生轨 [lane: native]                                                │
+│    阶段1 暂存    复制 windows/ → 生成 ephemeral/、插件符号链接          │
+│    阶段2 翻译    把 CMakeLists 里的 MSVC 标志翻成 Clang 等价            │
+│    阶段5 CMake   LLVM-MinGW clang/lld 编译链接 runner+插件              │
+│        → <app>.exe   （经 C ABI 链接 flutter_windows.dll）             │
 │                                                                       │
-│  ① 阶段3 kernel         frontend_server.dart.snapshot（host Dart VM）  │
-│        → app.dill        （平台无关的 Dart kernel 快照）                │
+│  Dart 轨 [lane: dart]                                                 │
+│    阶段3 kernel   frontend_server.dart.snapshot（host Dart VM）        │
+│        → app.dill     （平台无关的 Dart kernel 快照）                   │
+│    阶段4 AOT      Wine + gen_snapshot.exe（Windows PE 二进制）          │
+│        → app.so       （ELF 容器，内含 x86_64 机器码）                  │
 │                                                                       │
-│  ② 阶段4 AOT            Wine + gen_snapshot.exe（Windows PE 二进制）   │
-│        → app.so          （ELF 容器，内含 x86_64 机器码）               │
+│  资源轨 [lane: assets]                                                │
+│    阶段6 资源     copy_flutter_bundle（门控：等 kernel 完成后再启动）   │
+│        → flutter_assets/   （纯 host Dart，与 AOT、CMake 并行）        │
 │                                                                       │
-│  ③ 阶段5 CMake/Ninja    LLVM-MinGW clang/lld 编译链接 runner+插件      │
-│        → <app>.exe       （经 C ABI 链接 flutter_windows.dll）         │
-│                                                                       │
-│  ④⑤ 阶段6 assemble      资源打包 + 产物组装成最终可分发包              │
-└─────────────────────────────────────────────────────────────────────┘
+│  汇合 [lane: join]                                                    │
+│    阶段7 组装     产物组装成最终可分发包（串行汇合点）                   │
+└───────────────────────────────────────────────────────────────────────┘
 ```
+
+**三 lane 并行**：原生轨（暂存→翻译→CMake）、Dart 轨（kernel→AOT）、资源轨（copy_flutter_bundle）三条 lane 的产物文件集互不重叠，可安全并行。资源轨是纯 host Dart 任务，为避免与 kernel 编译两个 Dart 进程争用工程 `.dart_tool/`，它带一道**跨轨门控**——等 kernel 阶段结束再启动，随后仍与 AOT、CMake 重叠。全部 lane 完成后，串行执行汇合的组装阶段（阶段 7）。调度决策是纯函数（`planSchedule`），可用 `--no-parallel` 回退为原始串行次序；每次构建结束打印逐阶段计时报告，并行模式下还给出相对串行的节省比例（详见第 9 章）。
 
 **为什么是这条路？** Dart 应用的编译天然分成两段：
 
@@ -145,13 +152,13 @@ Flutter 官方只能在 **Windows 主机**上用 MSVC + Windows SDK 构建 `flut
 | profile | 是 | `windows-x64-profile` | 运行 | AOT + observatory |
 | release | 是 | `windows-x64-release` | 运行 | AOT，product VM |
 
-流水线里 `AotCompileStage.shouldRun` 直接返回 `ctx.mode.isAot`，因此 debug 构建根本没有阶段 4，阶段总数动态变为 5。
+流水线里 `AotCompileStage.shouldRun` 直接返回 `ctx.mode.isAot`，因此 debug 构建根本没有阶段 4，阶段总数动态变为 6。
 
 ---
 
-## 第 3 章 六条关键技术决策
+## 第 3 章 七条关键技术决策
 
-README「Key design decisions」列了六条，它们正是理解全项目的钥匙。逐条结合源码展开：
+README「Key design decisions」列了七条，它们正是理解全项目的钥匙。逐条结合源码展开：
 
 ### 决策 1：`flutter_windows.dll` 原样复用
 
@@ -189,6 +196,10 @@ String neutralizeFlutterAssemble(String cmakeContent) {
 ### 决策 6：尽量少改被编译的应用
 
 修复交叉编译问题时，优先把方案留在 flutter_build 一侧（编译标志 `-Wno-…`、MinGW 垫片头、CMake 配置），源码级补丁是最后手段，只打在物化副本上，且保持 MSVC 兼容。这条是前五条背后的"宪法"。
+
+### 决策 7：三 lane 并行 + 保守跨轨门控
+
+原生轨（暂存→翻译→CMake）、Dart 轨（kernel→AOT）、资源轨（`copy_flutter_bundle`）三条 lane 的产物文件集互不重叠，并行无竞争；唯一的隐性冲突是资源轨的 `flutter assemble` 与 kernel 的 frontend_server 同为 host Dart 进程，可能争用工程 `.dart_tool/`。因此资源轨带一道**保守门控**：等 kernel 阶段结束（无论成功/跳过/失败，均在 `finally` 里放行 Completer）再启动，随后仍与 AOT、CMake 重叠。调度被抽成纯函数 `planSchedule`，可脱离真实构建单测；`--no-parallel` 一键回退串行。详见第 9 章。
 
 ---
 ---
@@ -390,11 +401,11 @@ Can't load Kernel binary: Invalid kernel binary format version (expected 130, fo
 
 # 第三部分 · 构建流水线逐阶段精讲
 
-本部分是全书核心，逐阶段拆解 `lib/src/build/` 下的实现。先讲编排器与共享上下文，再按执行顺序精讲六个阶段。
+本部分是全书核心，逐阶段拆解 `lib/src/build/` 下的实现。先讲编排器、并行调度与共享上下文，再按执行顺序精讲七个阶段。
 
-## 第 9 章 流水线编排与 `BuildContext`
+## 第 9 章 流水线编排、并行调度与 `BuildContext`
 
-> 对应源码：`lib/src/build/pipeline.dart`、`build_context.dart`、`stages/build_stage.dart`
+> 对应源码：`lib/src/build/pipeline.dart`、`build_schedule.dart`、`stage_timing.dart`、`build_context.dart`、`stages/build_stage.dart`
 
 ### BuildContext：不可变的"构建契约"
 
@@ -413,7 +424,7 @@ String get dataDir          => p.join(outputDir, 'data');
 String get mingwCompatDir   => p.join(intermediatesDir, 'mingw_compat');// 兼容垫片头目录
 ```
 
-两个值得记住的选项：`incremental`（默认开，kernel/AOT 输入未变则跳过重编）、`dllSearchRoot`（预构建 DLL 搜索根，默认项目根祖父目录，收窄可加速大型工作区）。
+两个值得记住的选项：`incremental`（默认开，kernel/AOT 输入未变则跳过重编）、`dllSearchRoot`（预构建 DLL 搜索根，默认项目根祖父目录，收窄可加速大型工作区）。第三个开关 `parallel`（默认开，`--no-parallel` 关闭）决定流水线按三 lane 并行还是退回原始串行次序。
 
 ### BuildStage：阶段抽象
 
@@ -427,30 +438,85 @@ abstract class BuildStage {
 }
 ```
 
-### BuildPipeline：薄编排器
+### BuildPipeline：编排器 + lane 执行
 
 ```dart
 List<BuildStage> _stages() => [
-  SourceStagingStage(),     // 阶段1 暂存 CMake 源
-  TranslateFlagsStage(),    // 阶段2 翻译 MSVC 标志
-  CompileKernelStage(),     // 阶段3 编译 kernel → app.dill
-  AotCompileStage(),        // 阶段4 AOT → app.so（仅 release/profile）
-  CMakeBuildStage(),        // 阶段5 CMake/Ninja → .exe
-  AssembleBundleStage(),    // 阶段6 组装 bundle
+  SourceStagingStage(),      // 阶段1 暂存 CMake 源
+  TranslateFlagsStage(),     // 阶段2 翻译 MSVC 标志
+  CompileKernelStage(),      // 阶段3 编译 kernel → app.dill
+  AotCompileStage(),         // 阶段4 AOT → app.so（仅 release/profile）
+  CMakeBuildStage(),         // 阶段5 CMake/Ninja → .exe
+  FlutterAssetsStage(),      // 阶段6 资源打包 → flutter_assets/
+  AssembleBundleStage(),     // 阶段7 组装 bundle
 ];
 
 Future<void> run(BuildContext ctx) async {
-  final stages = _stages().where((s) => s.shouldRun(ctx)).toList(); // 过滤
-  final total = stages.length;                                       // 动态总数
-  for (var i = 0; i < total; i++) {
-    await _log.group('Stage ${i + 1}/$total · ${stages[i].name}',
-        () => stages[i].run(ctx));
+  // 并行前的公共准备：
+  //   1. intermediates 目录原由暂存阶段创建，但并行时 kernel 可能先于暂存
+  //      启动，故提前创建。
+  //   2. wine 包装脚本被 AOT 与 CMake 阶段共用，提前一次原子落盘，避免并行竞争。
+  await Directory(ctx.intermediatesDir).create(recursive: true);
+  await WineWrapper(toolchain: ctx.toolchain, buildRoot: ctx.buildRoot).materialize();
+
+  final schedule = planSchedule(_stages(), parallel: ctx.parallel);
+
+  // 为每个阶段建一个 Completer（按阶段名）；带 gate 的 lane 启动前 await
+  // 前驱阶段的 completer。
+  final gates = <String, Completer<void>>{ /* ... */ };
+  final timings = <StageTiming>[];
+  final wall = Stopwatch()..start();
+
+  if (schedule.concurrent.isNotEmpty) {
+    // Future.wait 默认 eagerError=false：等所有 lane 收尾后再报首个错误，
+    // 不会留下半死的子进程。资源轨会先等 kernel（gate）。
+    await Future.wait(
+        schedule.concurrent.map((l) => _runLane(l, ctx, timings, gates)));
   }
+  for (final lane in schedule.serial) {   // 汇合：依赖并行组全部产物
+    await _runLane(lane, ctx, timings, gates);
+  }
+
   _log.success('Windows build complete: ${ctx.finalExe}');
+  _reportTimings(timings, wall.elapsed, ctx.parallel);   // 计时报告
 }
 ```
 
-关键点：阶段清单**面向 Windows 目标固定**，不是跨平台抽象层；`shouldRun` 过滤后编号按实际运行数动态计算，所以 debug 构建显示 `Stage 1/5 … 5/5`。
+关键点：阶段清单**面向 Windows 目标固定**（7 项，顺序是 `planSchedule` 的硬约定，不符即抛 `ArgumentError`，避免静默错位分组），不是跨平台抽象层；`shouldRun` 为 false 的阶段（如 debug 无 AOT）被跳过，但**不改变** lane 结构与门控关系。
+
+### planSchedule：把 7 阶段切成并行 lane（`build_schedule.dart`）
+
+调度决策被抽成**纯函数**，可脱离真实构建单独单测分组、顺序与门控：
+
+```dart
+class StageLane {
+  final String label;              // 日志分组前缀：native / dart / assets / join
+  final List<BuildStage> stages;   // lane 内按序串行
+  final String? gateOnStageName;   // 跨 lane 软依赖：等其它 lane 的同名阶段完成
+}
+
+BuildSchedule planSchedule(List<BuildStage> stages, {required bool parallel}) {
+  if (parallel) {
+    return BuildSchedule(
+      concurrent: [
+        StageLane('native', [staging, translate, cmake]),
+        StageLane('dart',   [kernel, aot]),
+        // 保守门控：资源轨等 kernel 完成再启动（避开两个 host Dart 进程
+        // 争用 .dart_tool），启动后仍与 AOT、原生轨 CMake 并行。
+        StageLane('assets', [assets], gateOnStageName: kernel.name),
+      ],
+      serial: [StageLane('join', [assemble])],
+    );
+  }
+  // 顺序回退：concurrent 置空，全部按原始次序落 serial 依序执行。
+}
+```
+
+**为什么这样切是安全的？** 三条前置 lane 的产物文件集互不重叠：原生轨只写 `windows_src/`、`cmake_build/` 与 exe；Dart 轨只写 `intermediates/` 下的 dill/elf；资源轨只写 `flutter_assets/`。唯一的隐性冲突在 host Dart 侧——资源轨的 `flutter assemble` 与 kernel 的 frontend_server 是两个 Dart 编译进程，都可能摸工程 `.dart_tool/`。因此资源轨带 `gateOnStageName: kernel` 的**保守门控**：等 kernel 结束再启动，但仍与 AOT（Wine 进程）、CMake（Ninja 进程）重叠。
+
+**门控的异常安全**：每个阶段名对应一个 `Completer`；lane 启动前 `await gates[name].future`。阶段结束时——**无论成功 / 跳过 / 失败**——都在 `finally` 里 complete。kernel 编译失败绝不会让资源轨永久挂起。
+
+**计时报告**：每阶段记录 `StageTiming{lane, name, elapsed}`（纯数据类）与 `formatDuration`（`<1s → NNNms`、`<60s → N.Ns`、更长 → `Mm S.Ss`），构建结束打印 `[lane] 阶段名 → 耗时` 表与总用时；并行模式额外算出「各阶段串行之和 vs 并行实际」的节省时长与百分比，一眼看出并行收益与编译瓶颈。
 
 ---
 
@@ -650,24 +716,15 @@ snap 版 Flutter 会导出 CFLAGS/CXXFLAGS/LDFLAGS 等（为其自带 GCC 构建
 
 ---
 
-## 第 15 章 阶段 6：产物组装与原生 DLL 打包
+## 第 15 章 阶段 6 资源打包与阶段 7 产物组装
 
-> 对应源码：`stages/assemble_bundle_stage.dart`、`native_dll.dart`
+> 对应源码：`stages/flutter_assets_stage.dart`、`stages/assemble_bundle_stage.dart`、`native_dll.dart`
 
-把产物组装到 `outputDir/`，布局与官方一致。
+### 阶段 6：资源打包（`FlutterAssetsStage`）
 
-### 单遍扫描 cmake_build
+资源打包此前塞在组装阶段串行执行，等于把这段纯 host Dart 任务叠在关键路径末尾。它只依赖 Dart 工程与 Flutter SDK——既不依赖 CMake 原生轨的产物（exe / 插件 DLL），也不需要任何 Windows 二进制——因此独立成阶段，作为一条 lane 藏进 CMake 构建的时间窗口（保守门控等 kernel 完成后再启动，见第 9 章）。
 
-`_scanCmakeBuild` 一次递归遍历同时定位 runner exe 与收集所有插件 `.dll`（历史上是两次独立遍历）。exe 偏好顺序：`runner/` 子目录 → 根目录 → 任意候选，并跳过 `CMakeFiles/` 里的编译器探测产物。插件 DLL 因阶段 1 已设 `PREFIX ""`，此处直接按原始文件名拷贝。
-
-### 按模式选引擎 DLL + icu + app.so
-
-```dart
-final engineDll = ctx.artifacts.flutterWindowsDllForMode(ctx.mode); // 决策/第7章
-// 拷 flutter_windows.dll、data/icudtl.dat；AOT 且存在则拷 data/app.so
-```
-
-### flutter_assets 生成：复用官方逻辑
+#### 复用官方逻辑（`copy_flutter_bundle`）
 
 资源打包不自己实现，而是调 `flutter assemble copy_flutter_bundle`——该 target 只依赖 KernelSnapshot（不触发 gen_snapshot、无需 Windows 二进制），因此能在 Linux 上产出 flutter_assets：
 
@@ -682,7 +739,22 @@ await runner.run('<flutter>/bin/flutter', [
 
 生成后若 flutter_assets 仍为空，明确 warn（应用很可能无窗口/静默退出），提示用 `--debug-console` 排查。
 
-### 预构建原生 DLL 的两步补齐（`NativeDllScanner`）
+### 阶段 7：产物组装（`AssembleBundleStage`）
+
+把产物组装到 `outputDir/`，布局与官方一致。
+
+#### 单遍扫描 cmake_build
+
+`_scanCmakeBuild` 一次递归遍历同时定位 runner exe 与收集所有插件 `.dll`（历史上是两次独立遍历）。exe 偏好顺序：`runner/` 子目录 → 根目录 → 任意候选，并跳过 `CMakeFiles/` 里的编译器探测产物。插件 DLL 因阶段 1 已设 `PREFIX ""`，此处直接按原始文件名拷贝。
+
+#### 按模式选引擎 DLL + icu + app.so
+
+```dart
+final engineDll = ctx.artifacts.flutterWindowsDllForMode(ctx.mode); // 决策/第7章
+// 拷 flutter_windows.dll、data/icudtl.dat；AOT 且存在则拷 data/app.so
+```
+
+#### 预构建原生 DLL 的两步补齐（`NativeDllScanner`）
 
 有些插件依赖预编译 Windows DLL（如 `opencv_world490.dll`），在 CMakeLists 里以 Windows 绝对路径或预编译产物路径引用，且常被 `if(EXISTS ...)` 包裹——Linux 上文件不存在就被静默跳过，最终只在运行时暴露为 `DynamicLibrary.open` 失败。补两步：
 
@@ -795,7 +867,7 @@ bin 入口用 `args` 包的 `CommandRunner` 组装四个子命令，顶层标志
 
 ### windows：完整构建（主命令）
 
-`run()` 依次：`_pickFlavor()`（三标志互斥，默认 release）→ 加载 project/env/paths → provision toolchain（`--no-precache` 时 allowDownload=false）→ ensure engine artifacts → 组装 `BuildContext` → `BuildPipeline().run()` → `_maybeDeploy()`。`--obfuscate` 必须伴 `--split-debug-info` 否则报错。完整标志表见附录 A。
+`run()` 依次：`_pickFlavor()`（三标志互斥，默认 release）→ 加载 project/env/paths → provision toolchain（`--no-precache` 时 allowDownload=false）→ ensure engine artifacts → 组装 `BuildContext` → `BuildPipeline().run()` → `_maybeDeploy()`。`--obfuscate` 必须伴 `--split-debug-info` 否则报错。并行由 `--[no-]parallel` 控制（默认三 lane 并行，`--no-parallel` 回退串行）；每次构建结束打印逐阶段计时报告。完整标志表见附录 A。
 
 ### clean：删项目级输出
 
@@ -883,6 +955,7 @@ flutter_build clean [-o path] [--cmake]
 | `--debug-console` | 给 runner 注入日志（排查静默退出） |
 | `--[no-]incremental` | 输入未变时跳过重编（默认开） |
 | `--dll-search-root <dir>` | 预构建 DLL 搜索根（默认祖父目录） |
+| `--[no-]parallel` | 三 lane 并行（原生/Dart/资源，保守门控），默认开 |
 
 **顶层标志**：`-v/--verbose`、`--no-color`、`--cache-dir <dir>`、`--version`。
 
@@ -941,7 +1014,9 @@ lib/src/
 ├ commands/{doctor,precache,windows,clean}_command.dart
 └ build/
   ├ build_context.dart              不可变构建契约 + 路径派生
-  ├ pipeline.dart                   阶段编排
+  ├ pipeline.dart                   阶段编排：lane 执行、跨轨门控与计时报告
+  ├ build_schedule.dart             planSchedule：并行/顺序调度纯函数（可单测）
+  ├ stage_timing.dart               阶段计时记录与时长格式化
   ├ wine_wrapper.dart               Wine 包装脚本
   ├ msvc_flag_translator.dart       MSVC→Clang 标志翻译
   ├ mingw_compat.dart               垫片头 + 库名大小写修正
@@ -951,12 +1026,12 @@ lib/src/
   ├ incremental.dart                增量判据（depfile + stamp）
   ├ native_dll.dart                 预构建 DLL 发现与校验
   ├ debug_instrumentation.dart      runner 日志注入
-  └ stages/                         六个阶段实现
+  └ stages/                         七个阶段实现
 ```
 
 ---
 
-> 本手册完。建议结合源码与仓库内 `README.md`/`README.zh.md` 一起阅读。掌握六阶段流水线与"不碰源码优先"的设计红线，就掌握了整个项目的灵魂。
+> 本手册完。建议结合源码与仓库内 `README.md`/`README.zh.md` 一起阅读。掌握七阶段流水线、三 lane 并行调度与"不碰源码优先"的设计红线，就掌握了整个项目的灵魂。
 
 ---
 

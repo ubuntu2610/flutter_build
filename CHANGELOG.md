@@ -9,3 +9,9 @@
 - CMake orchestrator with cross-compile toolchain file.
 - gen_snapshot runner via Wine (release / profile AOT).
 - Asset bundler and output packager.
+- Parallel three-lane pipeline (native / Dart / assets) with a conservative
+  cross-track gate; `--no-parallel` falls back to sequential execution.
+- Per-stage timing report, including the wall time saved by parallelism.
+- Resource bundling extracted into a standalone `FlutterAssetsStage` so it
+  overlaps with the CMake build.
+- LLVM-MinGW pinned release upgraded to 20260922.

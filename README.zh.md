@@ -14,6 +14,7 @@
 - 一键工具链准备：支持自动下载、镜像、手动指定，或 `apt` 回退。
 - MSVC → GCC/Clang 的 CMake 编译标志翻译器，使大多数原生插件无需修改即可构建。
 - 静态链接 `libstdc++`、`libgcc`、`libwinpthread`——最小化运行时 DLL。
+- 三 lane 并行流水线（原生 / Dart / 资源），带保守跨轨门控与逐阶段计时报告——`--no-parallel` 可退回串行。
 - 带插件扫描的 `doctor` 命令，用于发现 WinRT / DirectX 12 / `__uuidof` 等坑点。
 
 ## 环境要求
@@ -141,6 +142,12 @@ flutter_build windows --release # 生成 .exe
 | `--no-precache`                        | 禁止自动下载工具链 / 产物，缺失时直接失败                 |
 | `--toolchain-path <dir>`               | 使用预装的 LLVM-MinGW；等同于 `LLVM_MINGW_ROOT`           |
 | `--[no-]tree-shake-icons`              | 摇树优化图标字体（默认开启）                              |
+| `--[no-]parallel`                      | 三 lane 并行执行（原生 / Dart / 资源，默认开启）          |
+| `--[no-]incremental`                   | 输入未变时跳过 kernel / AOT 重编（默认开启）              |
+| `--debug-console`                      | 给 runner 注入控制台日志（排查静默退出）                  |
+| `--dll-search-root <dir>`              | 预构建 DLL 搜索根目录（默认：项目根祖父目录）             |
+| `--copy` / `--no-copy`                 | 单次运行时覆盖 config.yaml 的 `auto_copy`                 |
+| `--config <path>`                      | 指定自动部署用的 config.yaml 路径                         |
 
 顶层参数：`-v` / `--verbose`、`--no-color`、`--cache-dir <dir>`、`--version`。
 
@@ -206,6 +213,8 @@ C:/flutter_build/flutter_build_example/
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+这五步映射到一条固定的 7 阶段流水线。在多核主机上，它以**三条产物互不重叠的并行 lane** 运行：*原生* lane（暂存 → 标志翻译 → CMake）、*Dart* lane（kernel → AOT）与*资源* lane（`copy_flutter_bundle`，带一道保守门控——等 kernel 阶段结束再启动，避免两个 host Dart 进程争用 `.dart_tool/`）。全部 lane 完成后由串行的*汇合*阶段组装最终 bundle。每次构建结束打印逐阶段计时报告；并行构建还会给出相对串行之和节省的墙钟时间。`--no-parallel` 可强制回退为原始串行次序。
+
 ## 关键设计决策
 
 1. **`flutter_windows.dll` 原样使用。** 它导出的是纯 C ABI，因此 MSVC 构建的 DLL 能与 MinGW 编译的目标文件干净链接。MinGW 导入库要么复用引擎缓存中的版本，要么通过 `llvm-dlltool` 重新生成。
@@ -220,6 +229,8 @@ C:/flutter_build/flutter_build_example/
 5. **ELF 格式 AOT 快照。** `gen_snapshot --snapshot_kind=app-aot-elf` 无论目标操作系统为何都会写出 ELF 文件。Flutter Windows 引擎内置了 ELF 加载器，会在运行时消费它。
 
 6. **尽量少改动被编译的程序。** 解决交叉编译兼容性问题时，优先使用仅在 `flutter_build` 内的方案——编译器标志（`-Wno-…`）、MinGW 兼容垫片头文件、CMake 配置——而非修改插件或应用源码。源码补丁是最后手段，只作用于物化后的副本（绝不碰 pub-cache 原件），且必须保持 MSVC 兼容，确保应用在真正的 Windows 主机上仍可不加修改地构建。
+
+7. **并行 lane + 保守门控。** 原生、Dart、资源三个阶段的产物文件集互不重叠，因此可并发执行。资源 lane 等待 kernel 阶段完成（`Completer` 在 `finally` 中释放，kernel 失败也不会挂起流水线），随后与 AOT、CMake 重叠运行。
 
 ---
 

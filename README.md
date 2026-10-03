@@ -16,6 +16,8 @@ MSVC, no Windows SDK, no Windows VM.
 - One-shot toolchain provisioning: auto-download, mirror, manual, or `apt` fallback.
 - MSVC → GCC/Clang CMake-flag translator so most stock plugins build unmodified.
 - Static linkage of `libstdc++`, `libgcc`, `libwinpthread` — minimal runtime DLLs.
+- Parallel three-lane pipeline (native / Dart / assets) with a conservative
+  cross-track gate and a per-stage timing report — `--no-parallel` to opt out.
 - `doctor` command with a plugin scan for WinRT / DirectX 12 / `__uuidof` gotchas.
 
 ## Requirements
@@ -148,6 +150,12 @@ for CI / Docker images.
 | `--no-precache`                        | Fail instead of auto-downloading toolchain / artifacts      |
 | `--toolchain-path <dir>`               | Use a pre-installed LLVM-MinGW; same as `LLVM_MINGW_ROOT`   |
 | `--[no-]tree-shake-icons`              | Tree-shake icon fonts (on by default)                       |
+| `--[no-]parallel`                      | Run native / Dart / assets lanes concurrently (default on)  |
+| `--[no-]incremental`                   | Skip kernel / AOT rebuild when inputs are unchanged         |
+| `--debug-console`                      | Inject console logging into the runner (debug silent exits) |
+| `--dll-search-root <dir>`              | Root for prebuilt-DLL discovery (default: project grandparent) |
+| `--copy` / `--no-copy`                 | Override `auto_copy` from config.yaml for this run          |
+| `--config <path>`                      | Path to config.yaml used for auto-deploy                    |
 
 Top-level flags: `-v` / `--verbose`, `--no-color`, `--cache-dir <dir>`, `--version`.
 
@@ -217,6 +225,15 @@ requires `sshpass` (`sudo apt install sshpass`).
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+The five steps map onto a fixed 7-stage pipeline. On multi-core hosts it runs
+as **three parallel lanes** with disjoint outputs: the *native* lane
+(staging → flag translation → CMake), the *Dart* lane (kernel → AOT) and the
+*assets* lane (`copy_flutter_bundle`, conservatively gated on the kernel stage
+so two host Dart processes never contend for `.dart_tool/`). A serial *join*
+stage assembles the final bundle once all lanes finish. Every build ends with
+a per-stage timing report; parallel builds also show the wall time saved vs.
+the serial sum. `--no-parallel` forces the original sequential order.
+
 ## Key design decisions
 
 1. **`flutter_windows.dll` is used unchanged.** It exports a pure C ABI, so
@@ -248,6 +265,11 @@ requires `sshpass` (`sudo apt install sshpass`).
    resort, applied only to materialized copies (never the pub-cache original),
    and must remain MSVC-compatible so the app still builds unmodified on a
    real Windows host.
+
+7. **Parallel lanes with a conservative gate.** The native, Dart and assets
+   stages write disjoint outputs, so they run concurrently. The assets lane
+   waits for the kernel stage (released in a `finally` block, so a kernel
+   failure can never hang the pipeline), then overlaps with AOT and CMake.
 
 ---
 
