@@ -191,6 +191,10 @@ C:/flutter_build/flutter_build_example/
 `--copy` / `--no-copy` 可在单次运行时覆盖 `auto_copy`。密码登录需安装
 `sshpass`（`sudo apt install sshpass`）。
 
+拷贝前会**先删除远程 app 目录**——纯 scp 覆盖会残留旧文件（曾出现旧
+`data/`（Dart 快照）与新二进制混搭导致运行异常）。若远程应用正在运行
+锁定文件，部署中止并提示先关闭。
+
 ---
 
 ## 架构

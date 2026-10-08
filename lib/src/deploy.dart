@@ -204,7 +204,27 @@ class SshDeployer {
       '-Command',
       "New-Item -ItemType Directory -Force -Path '$remoteParent'",
     ]);
-    // 2) scp -r 把 localDir 拷进远程父目录（→ remoteParent/<basename>）。
+    // 2) 先删除远程旧产物目录，再拷贝。scp 覆盖式拷贝不会清走旧文件：
+    //    部分更新时会留下新旧混搭（曾出现 kernel_blob（Dart 快照）与
+    //    原生 DLL 版本错位，导致运行期行为异常）。目录不存在则静默
+    //    跳过；删除失败（如远程 exe 正在运行锁定文件）中止部署并提示。
+    _log.info('  清理远程旧目录（防止新旧文件混搭）: $remotePath');
+    try {
+      await _ssh([
+        'powershell',
+        '-NoProfile',
+        '-Command',
+        "if (Test-Path '$remotePath') { "
+            "Remove-Item -Recurse -Force -ErrorAction Stop '$remotePath' }",
+      ]);
+    } on SubprocessException catch (e) {
+      throw ArtifactException(
+        '清理远程目录失败: $remotePath\n'
+        '远程应用可能正在运行并锁定了文件，请先关闭远程窗口后重试。\n'
+        '$e',
+      );
+    }
+    // 3) scp -r 把 localDir 拷进远程父目录（→ remoteParent/<basename>）。
     await _scp(localDir, remoteParent);
     sw.stop();
 

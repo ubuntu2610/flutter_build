@@ -2,6 +2,11 @@
 
 ## 0.1.0-dev
 
+- Auto-deploy now deletes the remote app directory before copying. A plain
+  scp overlay used to leave stale files behind, which once mixed an old Dart
+  kernel snapshot with new native DLLs and caused runtime misbehavior. If the
+  remote app is running and locks files, the deploy aborts with a hint.
+
 - Initial scaffold.
 - CLI: `doctor`, `precache`, `windows`, `clean`.
 - Toolchain: LLVM-MinGW auto-provision, Wine detection.

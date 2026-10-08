@@ -203,6 +203,11 @@ C:/flutter_build/flutter_build_example/
 Flags `--copy` / `--no-copy` override `auto_copy` per-run. Password auth
 requires `sshpass` (`sudo apt install sshpass`).
 
+Before copying, the remote app directory is **deleted first** — scp-only
+overlays would otherwise leave stale files behind (e.g. an old `data/`
+kernel snapshot mixed with new binaries). If the remote app is running
+and locks files, the deploy aborts with a hint to close it first.
+
 ---
 
 ## Architecture
