@@ -58,6 +58,29 @@ List<String> referencedDllPaths(String cmakeContent) {
 bool looksLikeWindowsAbsPath(String ref) =>
     RegExp(r'^[A-Za-z]:[\\/]').hasMatch(ref);
 
+/// 汇总 [plugins] 的 CMakeLists 里声明的预编译 DLL 基名（小写）。
+///
+/// 用于给广度扫描（[NativeDllScanner.copyPrebuiltDlls]）提供「白名单」：
+/// 只拷贝被某个插件声明过的 DLL，避免把工作区里无关的预编译 DLL
+/// （如仅为 MSVC 构建准备的 OpenCV 世界库）盲目塞进产物。
+///
+/// 文件名本身含未解析 CMake 变量的引用（如动态拼接的
+/// `opencv_world${VER}.dll`）不是具体 DLL 名，跳过；目录部分含变量
+/// （如 `${CMAKE_CURRENT_SOURCE_DIR}/../x/y.dll`）不影响基名，照常统计。
+Set<String> declaredDllBasenames(Iterable<WindowsPluginRef> plugins) {
+  final out = <String>{};
+  for (final plugin in plugins.where((pl) => pl.hasNativeCode)) {
+    final cmake = File(p.join(plugin.windowsCMakeDir, 'CMakeLists.txt'));
+    if (!cmake.existsSync()) continue;
+    for (final ref in referencedDllPaths(cmake.readAsStringSync())) {
+      final base = p.basename(ref.replaceAll(r'\', '/'));
+      if (base.contains(r'${')) continue; // 文件名非字面量，无法对应具体 DLL。
+      out.add(base.toLowerCase());
+    }
+  }
+  return out;
+}
+
 /// 把插件 CMakeLists 里的一条 DLL 引用 [rawRef] 解析为绝对路径，基准目录为
 /// [cmakeDir]（插件 `windows/`）。无法解析时返回 null：
 ///   - 仍含未展开的 CMake 变量（除 CMAKE_CURRENT_SOURCE_DIR / LIST_DIR）；
@@ -86,10 +109,15 @@ class NativeDllScanner {
   ///
   /// 已存在于 [outDir] 的 DLL（按小写基名去重）会被跳过。搜索深度受 [maxDepth]
   /// 限制，并跳过 [kDllSearchSkipDirs] 中的构建 / 缓存目录。
+  ///
+  /// [onlyBasenames] 非空时，只拷贝基名在集合内的 DLL（小写比较）——广度
+  /// 扫描是「插件声明了但精确解析失败」的兜底发现机制，不应打包工作区里
+  /// 未被任何插件声明的 DLL。传 null 保持旧行为（全部拷贝）。
   Future<void> copyPrebuiltDlls({
     required String outDir,
     required String searchRoot,
     int maxDepth = kDefaultDllSearchDepth,
+    Set<String>? onlyBasenames,
   }) async {
     final existing = _presentDllBasenames(outDir);
 
@@ -98,10 +126,14 @@ class NativeDllScanner {
 
     for (final dll in found) {
       final name = p.basename(dll.path);
-      if (existing.contains(name.toLowerCase())) continue;
+      final lower = name.toLowerCase();
+      if (existing.contains(lower)) continue;
+      if (onlyBasenames != null && !onlyBasenames.contains(lower)) {
+        continue; // 未被任何插件声明，不盲拷。
+      }
       await dll.copy(p.join(outDir, name));
       _log.info('  预构建 DLL: $name');
-      existing.add(name.toLowerCase());
+      existing.add(lower);
     }
   }
 
@@ -160,6 +192,8 @@ class NativeDllScanner {
       if (!cmake.existsSync()) continue;
       for (final ref in referencedDllPaths(cmake.readAsStringSync())) {
         final base = p.basename(ref.replaceAll(r'\', '/'));
+        // 文件名含未解析 CMake 变量（动态拼接名）时不是具体 DLL，无法校验。
+        if (base.contains(r'${')) continue;
         if (present.contains(base.toLowerCase())) continue;
         missing.putIfAbsent(base, () => ref);
       }

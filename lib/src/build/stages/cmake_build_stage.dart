@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../../cache_paths.dart';
 import '../build_context.dart';
 import '../host_env.dart';
 import '../mingw_compat.dart';
@@ -33,6 +34,17 @@ class CMakeBuildStage extends BuildStage {
     // 解决部分 Windows SDK 头文件在 MinGW-w64 中不存在的问题（如
     // shobjidl_core.h），无需修改插件源码。
     final compatDir = await _materializeCompatHeaders(ctx);
+
+    // OpenCV 交叉构建源（pp_ocr 等插件用）：插件内嵌的 opencv_world490.lib
+    // 是 MSVC ABI 的导入库，llvm-mingw 的 Itanium C++ 修饰名与之不兼容，
+    // 链接期必然 undefined symbol。若缓存根下存在用本工具链静态编译的
+    // OpenCV（<root>/opencv-mingw，见项目 README 的重编步骤），自动以
+    // -DOpenCV_DIR 注入，让插件的 find_package(OpenCV) 分支优先生效；
+    // 不存在则不干预（回退插件内嵌库，仅影响含 OpenCV 的插件）。
+    final opencvCmakeDir = p.join(CachePaths.resolve().root,
+        'opencv-mingw', 'lib', 'cmake', 'opencv4');
+    final hasCrossOpencv =
+        File(p.join(opencvCmakeDir, 'OpenCVConfig.cmake')).existsSync();
 
     final configureArgs = <String>[
       '-S',
@@ -92,6 +104,8 @@ class CMakeBuildStage extends BuildStage {
       //     unused-const-variable — constexpr 常量定义未引用（如 kWindowClassName）
       //     unused-local-typedef  — 函数内 typedef 名未引用（如 ACCENT_STATE）
       //     extra-qualification   — 类体内成员声明的多余类名限定（MSVC 允许）
+      //     unused-but-set-variable — 变量赋值/自增后从未读取（如仅统计
+      //     未输出的计数器；LLVM 23 起 -Wall 启用该诊断，MSVC /W3 不诊断）
       //   -fms-extensions — 让 Clang 识别 MSVC 扩展语法（#pragma comment 等），
       //     并将 extra-qualification 从硬错误降级为 ExtWarn（-fms-compatibility
       //     会破坏 MinGW-w64 标准库头文件，不可用）。-fms-extensions 下该警告
@@ -110,8 +124,10 @@ class CMakeBuildStage extends BuildStage {
           '-Wno-error=unused-const-variable '
           '-Wno-error=unused-local-typedef '
           '-Wno-error=microsoft-extra-qualification '
+          '-Wno-error=unused-but-set-variable '
           '-include cmath -include iterator -include algorithm '
           '-include cstdint -include cstring -include cstdio',
+      if (hasCrossOpencv) ...['-DOpenCV_DIR=$opencvCmakeDir'],
     ];
     // 用净化过的环境驱动 CMake：剥离宿主（如 Flutter snap）注入的
     // CFLAGS/CXXFLAGS/LDFLAGS 等，否则 -lepoxy/-lfontconfig 等 Linux 库会

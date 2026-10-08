@@ -70,9 +70,13 @@ class AssembleBundleStage extends BuildStage {
     );
     // 2) 广度扫描兜底：默认项目根的祖父目录（覆盖 libcimbar / paddle_ocr 等
     //    兄弟目录），可用 --dll-search-root 收窄以加速大型工作区。
+    //    只拷贝被插件 CMakeLists 声明过的基名——广度扫描是「声明了但精确
+    //    解析失败」的兜底，不应把工作区里未被声明的 DLL（如仅 MSVC 构建
+    //    用的 OpenCV 世界库）盲目塞进产物。
     await scanner.copyPrebuiltDlls(
       outDir: outDir,
       searchRoot: ctx.dllSearchRoot ?? p.dirname(p.dirname(ctx.project.root)),
+      onlyBasenames: dll.declaredDllBasenames(ctx.project.plugins),
     );
 
     await Directory(dataDir).create(recursive: true);
