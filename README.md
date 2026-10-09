@@ -151,6 +151,7 @@ for CI / Docker images.
 | `--toolchain-path <dir>`               | Use a pre-installed LLVM-MinGW; same as `LLVM_MINGW_ROOT`   |
 | `--[no-]tree-shake-icons`              | Tree-shake icon fonts (on by default)                       |
 | `--[no-]parallel`                      | Run native / Dart / assets lanes concurrently (default on)  |
+| `--aggressive-parallel`                | Aggressive: assets lane no longer waits for the kernel stage |
 | `--[no-]incremental`                   | Skip kernel / AOT rebuild when inputs are unchanged         |
 | `--debug-console`                      | Inject console logging into the runner (debug silent exits) |
 | `--dll-search-root <dir>`              | Root for prebuilt-DLL discovery (default: project grandparent) |
@@ -187,6 +188,7 @@ username: ubuntu            # SSH login
 password: secret            # or leave empty to use SSH keys
 auto_copy: true             # auto-deploy after every build
 remote_dir: C:/flutter_build # base dir on the Windows machine
+# incremental_deploy: false # disable incremental deploy (on by default)
 ```
 
 The output is copied to `remote_dir/<app_name>` (flat structure). For example,
@@ -203,7 +205,15 @@ C:/flutter_build/flutter_build_example/
 Flags `--copy` / `--no-copy` override `auto_copy` per-run. Password auth
 requires `sshpass` (`sudo apt install sshpass`).
 
-Before copying, the remote app directory is **deleted first** — scp-only
+**Incremental deploy (on by default)**: native DLLs dominate the bundle and
+rarely change, so a full re-upload every iteration is wasteful. A manifest of
+the previous deploy (`.<app_name>.deploy_manifest.json`, next to the bundle
+dir) is kept locally; subsequent deploys upload only changed files and delete
+removed ones — a typical iteration transfers just `app.so` + `flutter_assets`
++ app plugin DLLs. Any incremental failure (or a missing manifest) falls back
+to a full copy automatically.
+
+Before a full copy, the remote app directory is **deleted first** — scp-only
 overlays would otherwise leave stale files behind (e.g. an old `data/`
 kernel snapshot mixed with new binaries). If the remote app is running
 and locks files, the deploy aborts with a hint to close it first.

@@ -30,6 +30,7 @@ class BuildContext {
     this.incremental = true,
     this.dllSearchRoot,
     this.parallel = true,
+    this.aggressiveParallel = false,
   });
 
   final FlutterEnv env;
@@ -60,6 +61,11 @@ class BuildContext {
   /// 是否并行执行两条互不依赖的流水线（原生轨：暂存→翻译→CMake；Dart 轨：
   /// kernel→AOT），以缩短 wall-clock。由 `--no-parallel` 关闭回退为顺序执行。
   final bool parallel;
+
+  /// 激进并行：资源轨不再等 kernel，启动即与 Dart 轨全程并行（配套给
+  /// `flutter assemble` 注入 FLUTTER_ALREADY_LOCKED=true 绕过工程锁）。
+  /// 由 `--aggressive-parallel` 开启，默认关闭（保守门控）。
+  final bool aggressiveParallel;
 
   /// `buildRoot/<mode>` — 当前模式的根目录。
   String get modeDir => p.join(buildRoot, mode.cliName);

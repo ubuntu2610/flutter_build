@@ -29,3 +29,9 @@ auto_copy: true
 # 例如 remote_dir 为 C:/flutter_build、app 名为 flutter_build_example：
 #   C:/flutter_build/flutter_build_example
 remote_dir: C:/flutter_build
+
+# 增量部署（可选，默认开启）。开启后本地保留一份上次部署的文件清单，
+# 再次部署只上传变化的文件、删除远端已移除的文件（bundle 大头是几乎
+# 不变的原生 DLL，增量可把每次传输从上百 MB 降到几十 MB 甚至更少）。
+# 任何一步失败会自动回退全量拷贝；设为 false 可强制每次全量。
+# incremental_deploy: true

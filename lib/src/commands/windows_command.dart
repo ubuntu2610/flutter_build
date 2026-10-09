@@ -77,7 +77,13 @@ class WindowsCommand extends Command<int> {
           defaultsTo: true,
           help: '并行执行两条互不依赖的流水线（原生轨：暂存→翻译→CMake；\n'
               'Dart 轨：kernel→AOT）以缩短总用时，产物组装阶段汇合两轨结\n'
-              '果。用小核机器或需隔离排查时，用 --no-parallel 回退为顺序执行。');
+              '果。用小核机器或需隔离排查时，用 --no-parallel 回退为顺序执行。')
+      ..addFlag('aggressive-parallel',
+          negatable: false,
+          help: '激进并行：资源轨（bundle Flutter assets）不再等 kernel，\n'
+              '启动即与 Dart 轨全程并行（内部给 flutter assemble 注入\n'
+              'FLUTTER_ALREADY_LOCKED 绕过工程锁）。默认关闭：保守门控\n'
+              '等 kernel 完成后再启动资源轨。');
   }
 
   @override
@@ -145,6 +151,7 @@ class WindowsCommand extends Command<int> {
       incremental: (argResults?['incremental'] as bool?) ?? true,
       dllSearchRoot: argResults?['dll-search-root'] as String?,
       parallel: (argResults?['parallel'] as bool?) ?? true,
+      aggressiveParallel: argResults?['aggressive-parallel'] == true,
     );
 
     await BuildPipeline().run(context);

@@ -86,7 +86,11 @@ class BuildPipeline {
     await WineWrapper(toolchain: ctx.toolchain, buildRoot: ctx.buildRoot)
         .materialize();
 
-    final schedule = planSchedule(_stages(), parallel: ctx.parallel);
+    final schedule = planSchedule(
+      _stages(),
+      parallel: ctx.parallel,
+      aggressive: ctx.aggressiveParallel,
+    );
 
     // 为每个阶段建一个 Completer（按阶段名）。带 [StageLane.gateOnStageName] 的
     // lane 在启动前 await 前驱阶段的 Completer；前驱阶段结束时（无论成功/跳过/
@@ -136,8 +140,8 @@ class BuildPipeline {
       final sw = Stopwatch()..start();
       try {
         if (stage.shouldRun(ctx)) {
-          await _log.group('[${lane.label}] ${stage.name}',
-              () => stage.run(ctx));
+          await _log.group(
+              '[${lane.label}] ${stage.name}', () => stage.run(ctx));
           sw.stop();
           timings.add(StageTiming(
               lane: lane.label, name: stage.name, elapsed: sw.elapsed));
@@ -152,8 +156,7 @@ class BuildPipeline {
 
   /// 打印计时报告：每阶段耗时 + 总用时。并行模式下额外给出「各阶段串行之和 vs
   /// 并行实际」的节省，直观体现并行收益。
-  void _reportTimings(
-      List<StageTiming> timings, Duration wall, bool parallel) {
+  void _reportTimings(List<StageTiming> timings, Duration wall, bool parallel) {
     final pairs = <String, String>{};
     var serialSum = Duration.zero;
     for (final t in timings) {

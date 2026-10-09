@@ -37,8 +37,15 @@ List<String> assembleBundleArgs(BuildContext ctx) => <String>[
 /// flutter assemble 面向 windows-x64 时会读 PROGRAMFILES(X86) 探测 Visual Studio
 /// 路径；Linux 上该变量不存在，导致 dart_build target 直接报错退出。置空即可绕过
 /// 探测——copy_flutter_bundle 只需 Dart 产物，不需要 MSVC。
-Map<String, String> assembleBundleEnv() => <String, String>{
+///
+/// [skipProjectLock]（激进并行模式）：注入 FLUTTER_ALREADY_LOCKED=true，声明
+/// 锁已由外部持有，让 flutter assemble 跳过工程 `.dart_tool` 的加锁。激进模式
+/// 下它要与 frontend_server 并行，而后者不经 flutter_tools、不碰
+/// `.dart_tool/flutter_build` 缓存，实际无争用点；跳过加锁可避免潜在的锁等待。
+Map<String, String> assembleBundleEnv({bool skipProjectLock = false}) =>
+    <String, String>{
       'PROGRAMFILES(X86)': '',
+      if (skipProjectLock) 'FLUTTER_ALREADY_LOCKED': 'true',
     };
 
 /// 生成 flutter_assets 的资源打包阶段。
@@ -56,7 +63,7 @@ class FlutterAssetsStage extends BuildStage {
       p.join(ctx.env.sdkRoot, 'bin', 'flutter'),
       assembleBundleArgs(ctx),
       workingDirectory: ctx.project.root,
-      environment: assembleBundleEnv(),
+      environment: assembleBundleEnv(skipProjectLock: ctx.aggressiveParallel),
       stream: true,
       tag: 'assemble',
     );

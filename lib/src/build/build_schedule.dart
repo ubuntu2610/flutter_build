@@ -15,6 +15,13 @@
 // Dart 轨 AOT 并行。kernel 失败时其门控仍会被放行（见 BuildPipeline 的 finally），
 // 不会导致资源轨永久挂起。
 //
+// 激进模式（[planSchedule] 的 [aggressive]）：资源轨不再等 kernel，全程与
+// Dart 轨并行。此时由 flutter_assets_stage 给 `flutter assemble` 注入
+// FLUTTER_ALREADY_LOCKED=true 绕过 flutter_tools 的工程锁（frontend_server
+// 不经 flutter_tools、不碰 `.dart_tool/flutter_build` 缓存，实际无争用点），
+// 把 kernel→assets 这条被门控串起来的关键路径压平到 Dart 轨自己的
+// kernel→AOT 时长。默认仍保守，`--aggressive-parallel` 显式开启。
+//
 // 把调度决策从 [BuildPipeline] 的执行逻辑里抽成纯函数，便于脱离真实构建单测
 // 分组、顺序与门控关系。
 
@@ -61,10 +68,12 @@ const int kStageCount = 7;
 /// 依据 [parallel] 把有序阶段清单切成调度计划。
 ///
 /// [stages] 必须是 [BuildPipeline._stages] 约定的固定 7 项顺序；不符则抛
-/// [ArgumentError]（避免静默错位分组）。
+/// [ArgumentError]（避免静默错位分组）。[aggressive] 为 true 时解除资源轨
+/// 对 kernel 的门控（见上方“激进模式”）。
 BuildSchedule planSchedule(
   List<BuildStage> stages, {
   required bool parallel,
+  bool aggressive = false,
 }) {
   if (stages.length != kStageCount) {
     throw ArgumentError.value(
@@ -80,9 +89,10 @@ BuildSchedule planSchedule(
             [stages[stagingIdx], stages[translateIdx], stages[cmakeIdx]]),
         StageLane('dart', [stages[kernelIdx], stages[aotIdx]]),
         // 保守门控：资源轨等 kernel 完成再启动（避开两个 host Dart 进程争用
-        // .dart_tool），启动后仍与 AOT、原生轨 CMake 并行。
+        // .dart_tool），启动后仍与 AOT、原生轨 CMake 并行。激进模式下解除
+        // 门控，资源轨启动即与 kernel 并行（配合 FLUTTER_ALREADY_LOCKED）。
         StageLane('assets', [stages[assetsIdx]],
-            gateOnStageName: stages[kernelIdx].name),
+            gateOnStageName: aggressive ? null : stages[kernelIdx].name),
       ],
       serial: <StageLane>[
         StageLane('join', [stages[assembleIdx]]),

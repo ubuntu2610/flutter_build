@@ -143,6 +143,7 @@ flutter_build windows --release # 生成 .exe
 | `--toolchain-path <dir>`               | 使用预装的 LLVM-MinGW；等同于 `LLVM_MINGW_ROOT`           |
 | `--[no-]tree-shake-icons`              | 摇树优化图标字体（默认开启）                              |
 | `--[no-]parallel`                      | 三 lane 并行执行（原生 / Dart / 资源，默认开启）          |
+| `--aggressive-parallel`                | 激进并行：资源轨不再等 kernel，启动即与 Dart 轨全程并行   |
 | `--[no-]incremental`                   | 输入未变时跳过 kernel / AOT 重编（默认开启）              |
 | `--debug-console`                      | 给 runner 注入控制台日志（排查静默退出）                  |
 | `--dll-search-root <dir>`              | 预构建 DLL 搜索根目录（默认：项目根祖父目录）             |
@@ -176,6 +177,7 @@ username: ubuntu             # SSH 登录名
 password: secret             # 或留空改用 SSH 密钥
 auto_copy: true              # 每次构建成功后自动拷贝
 remote_dir: C:/flutter_build # Windows 上的目标根目录
+# incremental_deploy: false  # 关闭增量部署（默认开启）
 ```
 
 产物拷到 `remote_dir/<app_name>`（扁平结构，不镜像本地完整路径）。例如
@@ -191,7 +193,13 @@ C:/flutter_build/flutter_build_example/
 `--copy` / `--no-copy` 可在单次运行时覆盖 `auto_copy`。密码登录需安装
 `sshpass`（`sudo apt install sshpass`）。
 
-拷贝前会**先删除远程 app 目录**——纯 scp 覆盖会残留旧文件（曾出现旧
+**增量部署（默认开启）**：bundle 的大头是几乎不变的原生 DLL，每次全量
+重传浪费明显。本地会在产物目录同级保留一份上次部署的文件清单
+（`.<app 名>.deploy_manifest.json`），再次部署只上传内容变化的文件、删除
+远端已移除的文件——典型迭代只传 `app.so` + `flutter_assets` + 应用插件
+DLL，远小于全量。增量任何一步失败（或清单缺失）都自动回退全量拷贝。
+
+全量拷贝前会**先删除远程 app 目录**——纯 scp 覆盖会残留旧文件（曾出现旧
 `data/`（Dart 快照）与新二进制混搭导致运行异常）。若远程应用正在运行
 锁定文件，部署中止并提示先关闭。
 

@@ -71,6 +71,29 @@ void main() {
     });
   });
 
+  group('planSchedule · 激进并行（解除资源轨门控）', () {
+    final schedule = planSchedule(_stages(), parallel: true, aggressive: true);
+
+    test('lane 分组与保守模式一致', () {
+      expect(schedule.concurrent.map((l) => l.label).toList(),
+          <String>['native', 'dart', 'assets']);
+      expect(schedule.serial.map((l) => l.label).toList(), <String>['join']);
+    });
+
+    test('资源轨无门控，启动即与 kernel 并行', () {
+      final assets = schedule.concurrent.firstWhere((l) => l.label == 'assets');
+      expect(assets.gateOnStageName, isNull);
+    });
+
+    test('其余 lane 仍无门控', () {
+      for (final lane in schedule.concurrent) {
+        if (lane.label != 'assets') {
+          expect(lane.gateOnStageName, isNull);
+        }
+      }
+    });
+  });
+
   group('planSchedule · 顺序回退', () {
     final schedule = planSchedule(_stages(), parallel: false);
 
@@ -79,10 +102,8 @@ void main() {
     });
 
     test('串行展开后与原始执行次序一致', () {
-      final flat = schedule.serial
-          .expand((l) => l.stages)
-          .map((e) => e.name)
-          .toList();
+      final flat =
+          schedule.serial.expand((l) => l.stages).map((e) => e.name).toList();
       expect(flat, <String>[
         'staging',
         'translate',

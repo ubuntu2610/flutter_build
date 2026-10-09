@@ -22,8 +22,7 @@ void main() {
       expect(args, contains('-dBuildMode=release'));
       expect(args.last, 'copy_flutter_bundle');
 
-      final output =
-          args.firstWhere((a) => a.startsWith('--output='));
+      final output = args.firstWhere((a) => a.startsWith('--output='));
       expect(output, endsWith('flutter_assets'));
     });
 
@@ -41,6 +40,16 @@ void main() {
   group('assembleBundleEnv', () {
     test('置空 PROGRAMFILES(X86) 以绕过 VS 探测', () {
       expect(assembleBundleEnv()['PROGRAMFILES(X86)'], '');
+    });
+
+    test('默认不注入 FLUTTER_ALREADY_LOCKED（保守门控无需跳锁）', () {
+      expect(
+          assembleBundleEnv().containsKey('FLUTTER_ALREADY_LOCKED'), isFalse);
+    });
+
+    test('skipProjectLock 时注入 FLUTTER_ALREADY_LOCKED=true', () {
+      expect(assembleBundleEnv(skipProjectLock: true)['FLUTTER_ALREADY_LOCKED'],
+          'true');
     });
   });
 }
