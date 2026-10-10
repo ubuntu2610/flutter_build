@@ -175,7 +175,7 @@ class BuildPipeline {
           : '0';
       _log.info('  各阶段串行之和 ${formatDuration(serialSum)}，'
           '并行实际 ${formatDuration(wall)}，'
-          '节省约 ${formatDuration(saved)}（${pct}%）');
+          '节省约 ${formatDuration(saved)}（$pct%）');
     }
   }
 

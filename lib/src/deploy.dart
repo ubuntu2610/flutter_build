@@ -13,12 +13,22 @@
 // 例如 remote_dir 为 C:/flutter_build、app 名为 flutter_build_example：
 //   远程 C:/flutter_build/flutter_build_example
 //
-// 增量部署：产物 bundle 的大头是几乎不变的原生 DLL（opencv / onnxruntime /
-// flutter_windows 等），每次全量 scp 重传浪费明显。本地保留一份上次部署的文件
-// 清单（大小 + mtime + sha256），再次部署时只上传内容变化的文件、删除远端已
-// 移除的文件；清单缺失（首次部署 / 被清理）或增量任何一步失败时自动回退全量
-// 拷贝，行为与历史版本一致。清单文件放 bundle 目录同级（不入产物目录、不上
-// 传远端）：`<bundle 同级>/.<app 名>.deploy_manifest.json`。
+// 增量部署（远程对账模式）：产物 bundle 的大头是几乎不变的原生 DLL
+// （opencv / onnxruntime / flutter_windows 等），每次全量 scp 重传浪费明显。
+//
+// 远程 Windows 的产物目录可能被手工改动（删了文件 / 换了文件 / 混入无关
+// 文件），只信本地清单会漏传、漏删。因此对账基准是**远端实际清单**：
+//   1) SSH 取远端每个文件的 sha256（Get-FileHash）；
+//   2) 与本地逐文件对账（本地哈希可沿用上次清单缓存，size/mtime 未变免算）：
+//        远端缺失          → 上传（缺文件）
+//        远端 hash 不一致  → 上传覆盖（旧文件）
+//        远端 hash 一致    → 跳过（免传输）
+//        远端多出          → 删除（无用文件），并清理遗留空目录
+//   3) 待上传文件按顶层条目分组，多路 scp 并行上传（异步传输）；
+//   4) 完成后按本次实测吞吐率估算"全量删除+重拷"的耗时并对比显示。
+// 任何一步失败（远端不可达 / exe 被锁定等）自动回退全量拷贝，行为与历史
+// 版本一致。本地清单仍保留（`<bundle 同级>/.<app 名>.deploy_manifest.json`），
+// 仅作为本地哈希缓存加速对账，不再作为远端状态的依据。
 
 import 'dart:convert';
 import 'dart:io';
@@ -324,14 +334,121 @@ ManifestDiff diffDeployManifests(
   return ManifestDiff(current: current, changed: changed, removed: removed);
 }
 
-/// 增量部署的返回值：null 表示产物与上次完全一致（无需传输）。
+/// 本地 vs 远端的逐文件对账结果（纯函数，可独立测试）。
+///
+/// 分类以**内容哈希**为唯一依据（远端 mtime/时区不可靠）：
+///   - [missing]  远端缺失 → 上传
+///   - [expired]  远端存在但哈希不同（旧文件）→ 上传覆盖
+///   - [remove]   远端多出（本地没有，无用文件）→ 远端删除
+///   - [same]     两端哈希一致 → 跳过（免传输）
+class RemoteReconcile {
+  const RemoteReconcile({
+    required this.missing,
+    required this.expired,
+    required this.remove,
+    required this.same,
+  });
+
+  final List<String> missing;
+  final List<String> expired;
+  final List<String> remove;
+  final List<String> same;
+
+  /// 需要上传的文件 = 缺失 + 过期。
+  List<String> get upload => [...missing, ...expired]..sort();
+
+  bool get needsTransfer => missing.isNotEmpty || expired.isNotEmpty || remove.isNotEmpty;
+
+  static RemoteReconcile compute(
+    Map<String, String> localHashes,
+    Map<String, String> remoteHashes,
+  ) {
+    final missing = <String>[];
+    final expired = <String>[];
+    final same = <String>[];
+    for (final entry in localHashes.entries) {
+      final remote = remoteHashes[entry.key];
+      if (remote == null) {
+        missing.add(entry.key);
+      } else if (remote == entry.value) {
+        same.add(entry.key);
+      } else {
+        expired.add(entry.key);
+      }
+    }
+    final remove = remoteHashes.keys
+        .where((k) => !localHashes.containsKey(k))
+        .toList()
+      ..sort();
+    return RemoteReconcile(
+      missing: missing..sort(),
+      expired: expired..sort(),
+      remove: remove,
+      same: same..sort(),
+    );
+  }
+}
+
+/// 把待上传文件按**顶层条目**聚合并均衡分配到最多 [maxGroups] 组。
+///
+/// 同一顶层条目（如 `data/`）的所有文件必须落在同一组：多路 scp 并行时各
+/// 组写远端互不相交的子树，避免并发创建同一目录的竞争。条目按总字节降序
+/// 贪心放入当前最轻的桶（LPT，字节近似均衡）。纯函数。
+List<List<String>> balanceUploadGroups(
+  Iterable<String> relPaths,
+  int Function(String rel) sizeOf,
+  int maxGroups,
+) {
+  // 顶层条目 → 文件列表 / 字节合计。
+  final entries = <String, List<String>>{};
+  final entryBytes = <String, int>{};
+  for (final rel in relPaths) {
+    final top = rel.contains('/') ? rel.split('/').first : rel;
+    (entries[top] ??= []).add(rel);
+    entryBytes[top] = (entryBytes[top] ?? 0) + sizeOf(rel);
+  }
+  if (entries.isEmpty) return const [];
+
+  final tops = entryBytes.keys.toList()
+    ..sort((a, b) => entryBytes[b]!.compareTo(entryBytes[a]!));
+  final groupCount = maxGroups < 1 ? 1 : (maxGroups > tops.length ? tops.length : maxGroups);
+
+  // LPT 贪心：下一个条目放入当前总字节最小的桶。
+  final buckets = List.generate(groupCount, (_) => <String>[]);
+  final bucketBytes = List<int>.filled(groupCount, 0);
+  for (final top in tops) {
+    var lightest = 0;
+    for (var i = 1; i < groupCount; i++) {
+      if (bucketBytes[i] < bucketBytes[lightest]) lightest = i;
+    }
+    buckets[lightest].addAll(entries[top]!);
+    bucketBytes[lightest] += entryBytes[top]!;
+  }
+  for (final b in buckets) {
+    b.sort();
+  }
+  return buckets;
+}
+
+/// 增量部署的返回值：null 表示远端与本地完全一致（无需传输）。
 class _IncrementalOutcome {
-  _IncrementalOutcome(this.result, this.manifest);
+  _IncrementalOutcome(
+    this.result,
+    this.manifest, {
+    required this.reconcile,
+    required this.transferElapsed,
+  });
 
   final DeployResult result;
 
   /// 部署成功后要回写本地的清单。
   final Map<String, FileFingerprint> manifest;
+
+  /// 本次对账的分类结果（供日志展示）。
+  final RemoteReconcile reconcile;
+
+  /// 纯传输阶段耗时（不含远端对账扫描），用于吞吐率估算。
+  final Duration transferElapsed;
 }
 
 /// 用 scp（密码经 sshpass）把本地目录拷到远程 Windows。
@@ -347,11 +464,15 @@ class SshDeployer {
   final Logger _log;
   final ProcessRunner _runner;
 
-  /// 把 [localDir]（构建产物目录）拷到远程镜像位置，返回耗时与字节数。
+  /// 并行上传的路数（异步传输）。
+  static const int _maxParallelUploads = 4;
+
+  /// 把 [localDir]（构建产物目录）同步到远程镜像位置，返回耗时与字节数。
   ///
-  /// 优先增量（见文件头注释）：本地有上次部署清单时只传变化文件；清单缺失
-  /// 或增量失败时回退全量拷贝（与历史行为一致）。[DeployResult.bytes] 在
-  /// 增量路径下是实际传输的字节数（全量路径为 bundle 总大小）。
+  /// 优先远端对账增量（见文件头注释）：以远端实际文件指纹为基准，只传缺失 /
+  /// 过期文件、删除远端无用文件；对账任何一步失败时回退全量拷贝（与历史行为
+  /// 一致）。[DeployResult.bytes] 在增量路径下是实际传输的字节数（全量路径为
+  /// bundle 总大小）。
   Future<DeployResult> deployDir(String localDir) async {
     final dir = Directory(localDir);
     if (!dir.existsSync()) {
@@ -366,34 +487,42 @@ class SshDeployer {
     }
     await _requireTool('scp', '需要 scp：sudo apt install openssh-client');
 
-    _log.step('Deploy · 拷贝到 ${config.username}@${config.host} → $remotePath');
-    _log.info('  大小 ${_fmtBytes(bytes)}');
+    _log.step('Deploy · 同步到 ${config.username}@${config.host} → $remotePath');
+    _log.info('  bundle 总大小 ${_fmtBytes(bytes)}');
 
     final sw = Stopwatch()..start();
 
-    // —— 增量路径 ——
-    final prev = config.incrementalDeploy ? loadDeployManifest(localDir) : null;
-    if (prev != null) {
+    // —— 增量路径（远端对账）——
+    if (config.incrementalDeploy) {
       try {
-        final inc = await _deployIncremental(dir, prev, remotePath);
+        final inc = await _deployReconciled(dir, remotePath);
         if (inc == null) {
           sw.stop();
-          _log.success('Deploy 完成（产物无变化，跳过传输）: $remotePath  '
-              'bundle 总大小 ${_fmtBytes(bytes)}');
+          _log.success('Deploy 完成（远端与本地逐文件一致，跳过传输）: '
+              '$remotePath  bundle 总大小 ${_fmtBytes(bytes)}');
           return DeployResult(
               remotePath: remotePath, duration: sw.elapsed, bytes: 0);
         }
         sw.stop();
         saveDeployManifest(localDir, inc.manifest);
-        _log.success('Deploy 完成（增量）: $remotePath  用时 '
+        final r = inc.reconcile;
+        _log.success('Deploy 完成（增量同步）: $remotePath  用时 '
             '${(sw.elapsedMilliseconds / 1000).toStringAsFixed(1)}s '
-            '(${_fmtBytes(inc.result.bytes)}, '
-            '${_fmtRate(inc.result.bytes, sw.elapsed)}) · '
-            'bundle 总大小 ${_fmtBytes(bytes)}');
-        return inc.result;
+            '（上传 ${_fmtBytes(inc.result.bytes)}：缺 ${r.missing.length} / 旧 '
+            '${r.expired.length} · 跳过 ${r.same.length} · 删除多余 '
+            '${r.remove.length}）');
+        _logComparison(
+          bundleBytes: bytes,
+          uploadedBytes: inc.result.bytes,
+          elapsed: inc.transferElapsed,
+        );
+        return DeployResult(
+            remotePath: remotePath,
+            duration: sw.elapsed,
+            bytes: inc.result.bytes);
       } on Exception catch (e) {
-        // 任何一步失败（远端被手工改动、exe 被运行中的进程锁定等）都回退
-        // 全量拷贝；若全量也失败，下面的路径会给出明确错误。
+        // 任何一步失败（远端不可达、exe 被运行中的进程锁定等）都回退全量
+        // 拷贝；若全量也失败，下面的路径会给出明确错误。
         _log.info('  增量部署失败，回退全量拷贝：$e');
         sw
           ..reset()
@@ -447,44 +576,55 @@ class SshDeployer {
         remotePath: remotePath, duration: sw.elapsed, bytes: bytes);
   }
 
-  /// 增量部署：只上传变化的文件、删除远端已移除的文件。
+  /// 增量部署（远端对账模式）。
   ///
-  /// 返回 null 表示产物与上次完全一致（无需传输）。任何失败都抛异常，
-  /// 由调用方回退全量拷贝。
-  Future<_IncrementalOutcome?> _deployIncremental(
+  /// 流程：取远端逐文件指纹 → 与本地对账（缺/旧/多余/一致）→ 删除远端多余
+  /// 文件与空目录 → 按顶层条目分组并行上传缺失/过期文件。
+  ///
+  /// 返回 null 表示远端与本地完全一致（无需传输）。任何失败都抛异常，由
+  /// 调用方回退全量拷贝。
+  Future<_IncrementalOutcome?> _deployReconciled(
     Directory dir,
-    Map<String, FileFingerprint> prev,
     String remotePath,
   ) async {
-    final diff = diffDeployManifests(dir, prev);
+    // 1) 本地逐文件哈希（沿用上次清单缓存：size/mtime 未变免算哈希）。
+    //    注意：缓存沿用可能得到 null（历史清单从未算过哈希的文件）——
+    //    对账要求**每个**本地文件都有哈希，否则它不会出现在 localHashes
+    //    里，远端的同名文件会被误判为"多余"而删除（数据破坏）。null 一律
+    //    现算并回填，随清单持久化，下次免算。
+    final prev = loadDeployManifest(dir.path) ?? const <String, FileFingerprint>{};
+    final local = diffDeployManifests(dir, prev).current;
+    final localHashes = <String, String>{};
+    for (final e in local.entries) {
+      final h = e.value.sha256 ?? hashDeployFile(p.join(dir.path, e.key));
+      e.value.sha256 = h;
+      localHashes[e.key] = h;
+    }
 
-    if (diff.changed.isEmpty && diff.removed.isEmpty) {
-      // 无变化：确认远端目录仍在（被手工删除时回退全量重建）。
-      final r = await _sshOut(<String>[
-        'powershell',
-        '-NoProfile',
-        '-Command',
-        "Test-Path '$remotePath'",
-      ]);
-      if (!r.stdout.trim().endsWith('True')) {
-        throw ArtifactException('远端目录缺失: $remotePath（需全量重建）');
-      }
-      _log.info('  增量部署：产物与上次部署一致，无需传输。');
+    // 2) 远端实际清单（文件名 + sha256）。目录不存在 → 抛异常回退全量重建。
+    final remoteHashes = await _fetchRemoteManifest(remotePath);
+
+    // 3) 对账（以内容哈希为唯一依据）。
+    final rec = RemoteReconcile.compute(localHashes, remoteHashes);
+    if (!rec.needsTransfer) {
+      _log.info('  对账完成：远端与本地逐文件一致（${rec.same.length} 个），'
+          '无需传输。');
       return null;
     }
 
-    final transferred = _sumSizes(dir, diff.changed);
-    _log.info('  增量部署：${diff.changed.length} 个文件变化'
-        '（${_fmtBytes(transferred)}），${diff.removed.length} 个删除。');
-    for (final f in diff.changed.take(20)) {
-      _log.info('    + $f');
+    final uploadBytes = _sumSizes(dir, rec.upload);
+    _log.info('  对账结果：上传 ${rec.upload.length} 个'
+        '（缺失 ${rec.missing.length} / 过期 ${rec.expired.length}，'
+        '${_fmtBytes(uploadBytes)}）· 删除远端多余 ${rec.remove.length} 个 · '
+        '一致 ${rec.same.length} 个跳过');
+    for (final f in rec.upload.take(20)) {
+      _log.info('    ↑ $f');
     }
-    if (diff.changed.length > 20) {
-      _log.info('    … 共 ${diff.changed.length} 个');
+    if (rec.upload.length > 20) {
+      _log.info('    … 共 ${rec.upload.length} 个');
     }
 
-    // 1) 确保远端目标目录存在（scp -r 合并上传要求它已存在，避免
-    //    单目录时被当成重命名目标）。
+    // 4) 确保远端目标目录存在（scp -r 合并上传要求它已存在）。
     await _ssh([
       'powershell',
       '-NoProfile',
@@ -492,11 +632,10 @@ class SshDeployer {
       "New-Item -ItemType Directory -Force -Path '$remotePath'",
     ]);
 
-    // 2) 删除远端已移除的文件（保留“不残留旧文件”的语义，等价于旧版的
-    //    整目录重建；-ErrorAction SilentlyContinue 容忍远端已被手工删过）。
-    if (diff.removed.isNotEmpty) {
+    // 5) 删除远端无用文件（本地不存在的），并清理遗留的空目录。
+    if (rec.remove.isNotEmpty) {
       final paths = [
-        for (final rel in diff.removed) "'$remotePath/$rel'",
+        for (final rel in rec.remove) "'$remotePath/$rel'",
       ].join(',');
       await _ssh([
         'powershell',
@@ -505,35 +644,147 @@ class SshDeployer {
         'Remove-Item -Force -ErrorAction SilentlyContinue '
             '-LiteralPath $paths',
       ]);
+      await _pruneEmptyRemoteDirs(remotePath);
     }
 
-    // 3) 变化文件按原相对路径镜像暂存后一次 scp -r 上传：避免逐文件 scp
-    //    的多次 ssh 握手；目录结构由 scp -r 在远端自动补齐。
-    if (diff.changed.isNotEmpty) {
-      final staging =
-          await Directory.systemTemp.createTemp('flutter_build_deploy_');
-      try {
-        for (final rel in diff.changed) {
-          final dst = p.join(staging.path, rel);
-          Directory(p.dirname(dst)).createSync(recursive: true);
-          File(p.join(dir.path, rel)).copySync(dst);
-        }
-        final entries = diff.changed
-            .map((rel) => rel.split('/').first)
-            .toSet()
-            .map((seg) => p.join(staging.path, seg))
-            .toList();
-        await _scpEntries(entries, remotePath);
-      } finally {
-        staging.deleteSync(recursive: true);
-      }
-    }
+    // 6) 按顶层条目分组并行上传（目录结构由 scp -r 在远端自动补齐）。
+    final sw = Stopwatch()..start();
+    final bytes = await _uploadGrouped(dir, rec.upload, remotePath);
+    sw.stop();
 
     return _IncrementalOutcome(
       DeployResult(
-          remotePath: remotePath, duration: Duration.zero, bytes: transferred),
-      diff.current,
+          remotePath: remotePath, duration: Duration.zero, bytes: bytes),
+      local,
+      reconcile: rec,
+      transferElapsed: sw.elapsed,
     );
+  }
+
+  /// 取远端 [remotePath] 下每个文件的 sha256 指纹（相对 POSIX 路径 → 哈希）。
+  ///
+  /// 用 PowerShell Get-FileHash 对远端全量内容算哈希；整个命令包在双引号里，
+  /// 远端默认 shell（cmd）不解释引号内的管道。目录不存在时输出 NO_DIR，
+  /// 抛异常触发全量回退。
+  Future<Map<String, String>> _fetchRemoteManifest(String remotePath) async {
+    final root = remotePath.replaceAll("'", "''");
+    final r = await _sshOut(<String>[
+      'powershell',
+      '-NoProfile',
+      '-Command',
+      '"\$root = \'$root\'; '
+          "if (-not (Test-Path -LiteralPath \$root)) { Write-Output 'NO_DIR' } "
+          'else { Get-ChildItem -LiteralPath \$root -Recurse -File | '
+          'ForEach-Object { '
+          // 反斜杠用 [char]92 构造：字符串字面量的反斜杠经 ssh→cmd→
+          // powershell 多层传递后转义层数不可控（实测 '\\\\' 到远端已是
+          // 4 个字符，Replace 字面匹配失败，rel 保持反斜杠导致对账全错）。
+          // [char]92 / [char]47 不经过任何转义层，行为确定。
+          '\$rel = \$_.FullName.Substring(\$root.Length + 1)'
+          '.Replace([char]92, [char]47); '
+          '\$h = (Get-FileHash -LiteralPath \$_.FullName -Algorithm SHA256).Hash.ToLower(); '
+          "Write-Output (\$rel + '|' + \$_.Length + '|' + \$h) } }\"",
+    ]);
+    final out = r.stdout.trim();
+    if (out.startsWith('NO_DIR')) {
+      throw ArtifactException('远端目录缺失: $remotePath（需全量重建）');
+    }
+    final hashes = <String, String>{};
+    for (final raw in out.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty || line == 'NO_DIR') continue;
+      final parts = line.split('|');
+      if (parts.length < 3) continue; // 容错：跳过异常行
+      final hash = parts.last.trim().toLowerCase();
+      // 兜底归一化：远端 Replace 失效时 rel 可能带反斜杠。
+      final rel =
+          parts.sublist(0, parts.length - 2).join('|').trim().replaceAll('\\', '/');
+      if (rel.isEmpty || hash.length != 64) continue;
+      hashes[rel] = hash;
+    }
+    return hashes;
+  }
+
+  /// 删除远端多余文件被清走后遗留的空目录（从深到浅一轮）。
+  Future<void> _pruneEmptyRemoteDirs(String remotePath) async {
+    // 注意：每次 ssh 都是独立的 PowerShell 会话，\$root 不会延续——路径
+    // 必须由 Dart 侧插值注入（单引号转义防路径注入）。
+    final root = remotePath.replaceAll("'", "''");
+    await _ssh([
+      'powershell',
+      '-NoProfile',
+      '-Command',
+      '"Get-ChildItem -LiteralPath \'$root\' -Recurse -Directory | '
+          'Sort-Object { \$_.FullName.Length } -Descending | '
+          'Where-Object { -not (Get-ChildItem -LiteralPath \$_.FullName '
+          '-Force) } | Remove-Item -Force -ErrorAction SilentlyContinue"',
+    ]);
+  }
+
+  /// 待上传文件按顶层条目分组、多路 scp 并行上传，返回传输字节数。
+  ///
+  /// 同一顶层条目的文件在同一组（见 [balanceUploadGroups]），各组写远端
+  /// 互不相交的子树，避免并发目录创建竞争；组内仍按相对路径镜像暂存，
+  /// 避免逐文件 scp 的多次 ssh 握手。
+  Future<int> _uploadGrouped(
+    Directory dir,
+    List<String> files,
+    String remotePath,
+  ) async {
+    if (files.isEmpty) return 0;
+    final groups = balanceUploadGroups(
+      files,
+      (rel) => File(p.join(dir.path, rel)).lengthSync(),
+      _maxParallelUploads,
+    );
+    var bytes = 0;
+    await Future.wait(<Future<void>>[
+      for (final group in groups)
+        () async {
+          if (group.isEmpty) return;
+          bytes += _sumSizes(dir, group);
+          final staging =
+              await Directory.systemTemp.createTemp('flutter_build_deploy_');
+          try {
+            for (final rel in group) {
+              final dst = p.join(staging.path, rel);
+              Directory(p.dirname(dst)).createSync(recursive: true);
+              File(p.join(dir.path, rel)).copySync(dst);
+            }
+            final entries = group
+                .map((rel) => rel.split('/').first)
+                .toSet()
+                .map((seg) => p.join(staging.path, seg))
+                .toList();
+            await _scpEntries(entries, remotePath);
+          } finally {
+            staging.deleteSync(recursive: true);
+          }
+        }(),
+    ]);
+    return bytes;
+  }
+
+  /// 显示"增量同步 vs 全量删除+重拷"的耗时对比。
+  ///
+  /// 全量耗时按本次**纯传输**实测吞吐率对 bundle 总量估算（不做真实全量
+  /// 基准——那需要删除远端全部重传，与节省的初衷相悖）。[elapsed] 为传输
+  /// 阶段耗时；无传输时无法估算，跳过对比行。
+  void _logComparison({
+    required int bundleBytes,
+    required int uploadedBytes,
+    required Duration elapsed,
+  }) {
+    final secs = elapsed.inMilliseconds / 1000.0;
+    if (uploadedBytes <= 0 || secs <= 0) return;
+    final rate = uploadedBytes / secs; // bytes/s（含对账开销的实测均值）
+    final estFullSec = bundleBytes / rate;
+    if (estFullSec <= secs) return;
+    final saved = ((1 - secs / estFullSec) * 100).clamp(0, 100);
+    _log.info('  对比全量删除+重拷：bundle 总量 ${_fmtBytes(bundleBytes)}，'
+        '实测吞吐 ${_fmtRate(uploadedBytes, elapsed)} → 全量约需 '
+        '${estFullSec.toStringAsFixed(1)}s，本次增量同步 '
+        '${secs.toStringAsFixed(1)}s，节省约 ${saved.toStringAsFixed(0)}%');
   }
 
   static int _sumSizes(Directory dir, List<String> rels) => rels.fold(
@@ -567,30 +818,50 @@ class SshDeployer {
 
   Future<void> _scp(String localDir, String remoteParent) async {
     final target = '${config.username}@${config.host}:$remoteParent';
-    final args = <String>[
+    await _runScp(<String>[
       '-r',
       ..._commonSshOpts,
       '-P', // 注意：scp 用大写 -P 指定端口
       '${config.port}',
       localDir,
       target,
-    ];
-    await _runWithAuth('scp', args);
+    ]);
   }
 
   /// 把若干本地顶层条目合并拷入远端已存在的目录（增量上传用）。
   /// scp -r 会在远端自动创建不存在的子目录。
   Future<void> _scpEntries(List<String> localEntries, String remoteDir) async {
     final target = '${config.username}@${config.host}:$remoteDir';
-    final args = <String>[
+    await _runScp(<String>[
       '-r',
       ..._commonSshOpts,
       '-P',
       '${config.port}',
       ...localEntries,
       target,
-    ];
-    await _runWithAuth('scp', args);
+    ]);
+  }
+
+  /// 执行 scp：优先 `-O` 强制传统 rcp 协议。
+  ///
+  /// 【实测坑】OpenSSH 9.0+ 的 scp 默认走 SFTP 协议，对本工程的 Windows
+  /// OpenSSH 目标会**静默丢文件**：exit 0、无任何警告，但部分文件（尤其是
+  /// bundle 顶层的多个 DLL）根本没落地——119 MB 的 bundle 远端只有 37 MB，
+  /// 历史上所有"部署成功"实际都不完整，导致远端新旧文件混搭。`-O`（rcp
+  /// 协议）实测完整可靠。老版本 OpenSSH（<9.0）不认识 `-O`，识别到参数
+  /// 错误时回退默认协议。
+  Future<void> _runScp(List<String> scpArgs) async {
+    try {
+      await _runWithAuth('scp', <String>['-O', ...scpArgs]);
+    } on SubprocessException catch (e) {
+      final err = e.stderrText.toLowerCase();
+      if (!err.contains('unknown option') &&
+          !err.contains('unrecognized option')) {
+        rethrow;
+      }
+      _log.debug('scp 不支持 -O（OpenSSH < 9.0），回退默认协议。');
+      await _runWithAuth('scp', scpArgs);
+    }
   }
 
   static const List<String> _commonSshOpts = [

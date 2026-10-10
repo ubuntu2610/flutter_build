@@ -44,7 +44,7 @@ class WineWrapper {
         'export WINEDEBUG=-all\n'
         'exec "${toolchain.wineExecutable}" "\$@"\n';
 
-    final tmpFile = File('$scriptPath.tmp.${pid}');
+    final tmpFile = File('$scriptPath.tmp.$pid');
     await tmpFile.writeAsString(content);
     // owner 可执行位（测试会检查）在 rename 前设好，替换后即为最终权限。
     Process.runSync('chmod', <String>['+x', tmpFile.path]);

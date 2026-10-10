@@ -145,8 +145,10 @@ remote_dir: C:/project/flutter_build
       final same = diffDeployManifests(root, first);
       expect(same.changed, isEmpty);
 
-      // 内容真的变了：上传。
+      // 内容真的变了：上传。（显式推后 mtime，避免同一时钟 tick 内
+      // size 相同 + mtime 相同被误判为未变。）
       f.writeAsStringSync('v2');
+      f.setLastModifiedSync(DateTime.now().add(const Duration(seconds: 2)));
       final diff = diffDeployManifests(root, first);
       expect(diff.changed, <String>['data/app.so']);
       expect(diff.removed, isEmpty);
@@ -187,6 +189,91 @@ remote_dir: C:/project/flutter_build
 
       manifestFile.writeAsStringSync('not json');
       expect(loadDeployManifest(root.path), isNull);
+    });
+  });
+
+  group('RemoteReconcile.compute · 远端指纹对账', () {
+    final h1 = 'aa' * 32;
+    final h2 = 'bb' * 32;
+
+    test('缺文件、旧文件、无用文件、一致文件各归其类', () {
+      final rec = RemoteReconcile.compute(
+        {
+          'same.dll': h1,
+          'stale.dll': h1,
+          'new/data/app.so': h2,
+        },
+        {
+          'same.dll': h1, // 一致 → 跳过
+          'stale.dll': h2, // hash 不同 → 过期（覆盖上传）
+          'junk/leftover.txt': h2, // 本地没有 → 删除
+          // 'new/data/app.so' 远端没有 → 缺失（上传）
+        },
+      );
+      expect(rec.same, <String>['same.dll']);
+      expect(rec.expired, <String>['stale.dll']);
+      expect(rec.missing, <String>['new/data/app.so']);
+      expect(rec.remove, <String>['junk/leftover.txt']);
+      expect(rec.upload, containsAllInOrder(<String>['new/data/app.so', 'stale.dll']));
+      expect(rec.needsTransfer, isTrue);
+    });
+
+    test('两端完全一致 → 无需传输；远端为空 → 全部缺失', () {
+      final all = RemoteReconcile.compute({'a.dll': h1}, {'a.dll': h1});
+      expect(all.needsTransfer, isFalse);
+
+      final none = RemoteReconcile.compute({'a.dll': h1, 'b/c.so': h2}, {});
+      expect(none.missing, unorderedEquals(<String>['a.dll', 'b/c.so']));
+      expect(none.remove, isEmpty);
+      expect(none.upload.length, 2);
+    });
+  });
+
+  group('balanceUploadGroups · 并行上传分组', () {
+    int sizeOf(String rel) => rel.hashCode & 0xff + 1;
+
+    test('同一顶层条目的文件不跨组（避免并发 mkdir 竞争）', () {
+      final files = <String>[
+        'data/app.so',
+        'data/icudtl.dat',
+        'data/flutter_assets/one.bin',
+        'libcimbar.dll',
+        'app.exe',
+      ];
+      final groups = balanceUploadGroups(files, sizeOf, 4);
+      String topOf(String rel) =>
+          rel.contains('/') ? rel.split('/').first : rel;
+      // 两两比较：不同组之间的顶层条目集合必须互不相交。
+      for (var i = 0; i < groups.length; i++) {
+        for (var j = i + 1; j < groups.length; j++) {
+          final topsI = groups[i].map(topOf).toSet();
+          final topsJ = groups[j].map(topOf).toSet();
+          expect(topsI.intersection(topsJ), isEmpty,
+              reason: '组 $i 与组 $j 共享顶层条目: $topsI.intersection($topsJ)');
+        }
+      }
+      // 所有文件都在且只在一个组里。
+      final all = groups.expand((g) => g).toList()..sort();
+      expect(all, files.toList()..sort());
+    });
+
+    test('组数不超过上限，顶层条目少于上限时不产生空组', () {
+      final groups = balanceUploadGroups(
+          <String>['a.dll', 'data/x.so'], sizeOf, 4);
+      final nonEmpty = groups.where((g) => g.isNotEmpty).toList();
+      expect(nonEmpty.length, lessThanOrEqualTo(2));
+      expect(nonEmpty.expand((g) => g).length, 2);
+    });
+
+    test('按字节贪心均衡：大条目分摊到不同组', () {
+      final groups = balanceUploadGroups(
+        <String>['big1.bin', 'big2.bin', 'small/a.bin', 'small/b.bin'],
+        (rel) => rel.startsWith('big') ? 1000 : 10,
+        2,
+      );
+      final big1 = groups.indexWhere((g) => g.contains('big1.bin'));
+      final big2 = groups.indexWhere((g) => g.contains('big2.bin'));
+      expect(big1, isNot(equals(big2))); // 两个大文件分到不同组
     });
   });
 }

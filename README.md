@@ -202,6 +202,17 @@ C:/flutter_build/flutter_build_example/
   └── data/
 ```
 
+Deployment is an **incremental sync against the remote state**: the remote
+directory is fingerprinted (per-file SHA-256 via PowerShell), then only
+missing / changed files are uploaded (in parallel, grouped by top-level
+entry), extra remote files are removed, and identical files are skipped.
+Afterwards a time comparison against a full delete+re-copy (estimated from
+the measured throughput) is printed. This survives manual tampering with the
+remote directory — anything missing/stale/extra is reconciled. Set
+`incremental_deploy: false` in config.yaml to always do a full
+delete+re-copy. scp is forced to the legacy rcp protocol (`-O`) because the
+modern SFTP-based scp silently drops files to Windows OpenSSH servers.
+
 Flags `--copy` / `--no-copy` override `auto_copy` per-run. Password auth
 requires `sshpass` (`sudo apt install sshpass`).
 
