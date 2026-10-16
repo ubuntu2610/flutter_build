@@ -52,10 +52,23 @@ class AssembleBundleStage extends BuildStage {
 
     // 插件 DLL：来自上面的单遍扫描。generated_plugins.cmake 已设 PREFIX ""
     // IMPORT_PREFIX "" 去掉 MinGW 的 lib 前缀，此处直接按原始文件名拷贝即可。
+    // 【内容判等，勿"同基名即跳过"】产物目录跨构建复用，插件重编译出的新
+    // DLL 必须能覆盖旧版，否则 Dart 快照新、原生 DLL 旧混搭（曾致 pp_ocr
+    // 0.5.x 生产环境报 "Failed to lookup symbol ... error 127"）。
+    // 同基名的多个扫描命中只认第一个（Windows FS 基名不区分大小写）。
+    final claimedDlls = <String>{};
     for (final dllFile in scan.dlls) {
       final name = p.basename(dllFile.path);
-      final dest = p.join(outDir, name);
-      if (!File(dest).existsSync()) await dllFile.copy(dest);
+      if (!claimedDlls.add(name.toLowerCase())) continue;
+      final outcome = await dll.copyDllIfChanged(dllFile, File(p.join(outDir, name)));
+      switch (outcome) {
+        case dll.DllCopyOutcome.fresh:
+          log.info('  插件 DLL: $name');
+        case dll.DllCopyOutcome.updated:
+          log.info('  插件 DLL(内容已变，覆盖旧版): $name');
+        case dll.DllCopyOutcome.identical:
+          break; // 与上次构建一致，静默。
+      }
     }
 
     // 预构建 DLL：部分插件依赖预编译的 Windows DLL（如 opencv_world490.dll），
