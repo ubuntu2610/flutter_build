@@ -26,6 +26,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import '../io/fs_utils.dart';
 import '../logger.dart';
 import '../project.dart';
 
@@ -183,7 +184,9 @@ class NativeDllScanner {
     final handled = <String>{};
 
     final found = <File>[];
-    _findDlls(Directory(searchRoot), found, 0, maxDepth);
+    final unreadable = <String>[];
+    _findDlls(Directory(searchRoot), found, 0, maxDepth, unreadable: unreadable);
+    _reportUnreadable(unreadable);
 
     for (final dll in found) {
       final name = p.basename(dll.path);
@@ -303,16 +306,44 @@ class NativeDllScanner {
   }
 
   /// 递归搜索 .dll 文件，限制深度 [maxDepth]，跳过构建 / 缓存目录。
-  void _findDlls(Directory dir, List<File> results, int depth, int maxDepth) {
+  ///
+  /// 【逐目录容错】搜索根默认是项目根的祖父目录（常见即 `$HOME`），那里必然存在本
+  /// 工具无权访问、或目录名不是合法 UTF-8（Dart 解码成 U+FFFD 后无法回编码，再打开
+  /// 必然 ENOENT）的子目录。这类目录与「找预构建 DLL」无关：只跳过该子树并登记原因，
+  /// 不再让整条流水线在产物组装阶段以 `PathNotFoundException: Directory listing
+  /// failed` 崩溃。需要完整性的拷贝（[copyTree]）仍保持抛错。
+  void _findDlls(
+    Directory dir,
+    List<File> results,
+    int depth,
+    int maxDepth, {
+    List<String>? unreadable,
+  }) {
     if (depth > maxDepth) return;
     if (!dir.existsSync()) return;
-    for (final entity in dir.listSync(followLinks: false)) {
+    for (final entity in listDirTolerant(dir, unreadable: unreadable)) {
       if (entity is File) {
         if (entity.path.endsWith('.dll')) results.add(entity);
       } else if (entity is Directory) {
         if (kDllSearchSkipDirs.contains(p.basename(entity.path))) continue;
-        _findDlls(entity, results, depth + 1, maxDepth);
+        _findDlls(entity, results, depth + 1, maxDepth, unreadable: unreadable);
       }
     }
+  }
+
+  /// 把搜索期间跳过的目录聚合成**一次**告警。
+  ///
+  /// 机会性搜索漏掉个别目录不影响构建，但用户需要知道「有目录没被看到」，否则
+  /// 「DLL 明明在磁盘上却没进产物」会无从排查。明细只在 --verbose 下打印，避免
+  /// 遍历 `$HOME` 这类大目录时刷屏。
+  void _reportUnreadable(List<String> unreadable) {
+    if (unreadable.isEmpty) return;
+    for (final item in unreadable.take(5)) {
+      _log.debug('跳过不可访问目录：$item');
+    }
+    _log.warn('预构建 DLL 搜索跳过 ${unreadable.length} 个无法访问的目录'
+        '（权限不足或目录名非合法 UTF-8），已继续构建。');
+    _log.hint('若怀疑目标 DLL 就在其中：用 --dll-search-root 指向可访问的具体目录，'
+        '或加 --verbose 查看被跳过的目录名。');
   }
 }

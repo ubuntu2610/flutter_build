@@ -61,6 +61,29 @@ Future<void> copyTree(
   await runBounded(ops, concurrency);
 }
 
+/// 尽力列举一个目录的内容；列举失败时返回空列表，并把原因登记到 [unreadable]。
+///
+/// 供**机会性**扫描使用（例如在整个工作区 / `$HOME` 下搜预构建 DLL）。这类遍历随时
+/// 会撞上无法访问的子目录：
+///   - 权限不足（其他用户或 root 私有的目录）；
+///   - 目录在父目录列举之后、本目录列举之前被删除（竞态）；
+///   - 目录名不是合法 UTF-8：Linux 允许任意字节，Dart 把父目录返回的名字解码成
+///     U+FFFD 后无法回编码，拿这个字符串再打开必然 ENOENT。
+///
+/// 这些目录与「找到某个 DLL」无关，跳过并计数即可，绝不能让整条流水线崩掉。
+/// 需要「必须完整」的拷贝请用 [copyTree]（保持抛错，宁可失败也不静默漏文件）。
+List<FileSystemEntity> listDirTolerant(
+  Directory dir, {
+  List<String>? unreadable,
+}) {
+  try {
+    return dir.listSync(followLinks: false);
+  } on FileSystemException catch (e) {
+    unreadable?.add('${dir.path}（${e.osError?.message ?? e.message}）');
+    return const <FileSystemEntity>[];
+  }
+}
+
 /// 复制单个文件；源不存在时静默跳过。会按需创建目标父目录。
 Future<void> copyFileIfExists(String src, String dst) async {
   final f = File(src);

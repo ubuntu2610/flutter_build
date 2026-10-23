@@ -2,6 +2,20 @@
 
 ## 0.1.0-dev
 
+- The prebuilt-DLL broad scan (the `[join]` bundle stage) no longer aborts the
+  build when a directory under the search root cannot be listed. Its default
+  root is the project root's grandfather directory (in practice `$HOME`), which
+  inevitably holds unreadable subtrees: permission-denied dirs, and dirs whose
+  names are not valid UTF-8 — Linux allows arbitrary bytes, Dart decodes them to
+  U+FFFD and cannot re-encode them, so `stat` still succeeds
+  (`existsSync() == true`) while `opendir` fails with ENOENT. Any one of them
+  used to raise `PathNotFoundException: Directory listing failed` and kill the
+  whole build. Listing is now per-directory tolerant (`listDirTolerant`): the
+  subtree is skipped, DLLs elsewhere are still found, and what was skipped is
+  reported once (names under `--verbose`) with a hint to narrow
+  `--dll-search-root`. `copyTree` deliberately keeps failing loudly — silently
+  half-copying a source tree would just produce a broken bundle later.
+
 - Bundle assembly no longer skips DLLs by basename. The output directory is
   reused across builds, so "if it exists, skip" kept freshly recompiled plugin
   DLLs out of the bundle (new Dart AOT snapshot + stale native DLL mismatch —

@@ -82,6 +82,34 @@ void main() {
     });
   });
 
+  group('listDirTolerant', () {
+    test('可访问目录返回内容且不登记原因', () {
+      final d = Directory(p.join(tmp.path, 'ok'))..createSync();
+      File(p.join(d.path, 'a.txt')).writeAsStringSync('a');
+      final unreadable = <String>[];
+
+      final entries = listDirTolerant(d, unreadable: unreadable);
+
+      expect(entries.map((e) => p.basename(e.path)), contains('a.txt'));
+      expect(unreadable, isEmpty);
+    });
+
+    test('列举失败返回空列表并登记路径与原因', () {
+      final d = Directory(p.join(tmp.path, 'locked'))..createSync();
+      Process.runSync('chmod', <String>['000', d.path]);
+      addTearDown(() => Process.runSync('chmod', <String>['755', d.path]));
+      if (_listable(d)) {
+        markTestSkipped('当前用户可列举 000 目录（root 场景），无法验证容错');
+        return;
+      }
+      final unreadable = <String>[];
+
+      expect(listDirTolerant(d, unreadable: unreadable), isEmpty);
+      expect(unreadable, hasLength(1));
+      expect(unreadable.single, contains('locked'));
+    });
+  });
+
   group('dirSize', () {
     test('累加所有普通文件字节', () {
       final d = Directory(p.join(tmp.path, 'd'))..createSync();
@@ -92,4 +120,14 @@ void main() {
       expect(dirSize(d), 15);
     });
   });
+}
+
+/// 目录是否可列举（root 用户下 000 目录也可列举，用于跳过此类用例）。
+bool _listable(Directory dir) {
+  try {
+    dir.listSync(followLinks: false);
+    return true;
+  } on FileSystemException {
+    return false;
+  }
 }
